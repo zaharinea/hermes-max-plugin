@@ -31,6 +31,7 @@ class RateLimiter:
         self._next_global = 0.0
         self._next_chat: dict[str, float] = {}
         self._max_chats = max_chats
+        self._lock = asyncio.Lock()
 
     def _evict(self, now: float) -> None:
         if len(self._next_chat) <= self._max_chats:
@@ -44,13 +45,18 @@ class RateLimiter:
                 self._next_chat.pop(key, None)
 
     async def acquire(self, key: str) -> None:
-        """Wait until the next slot for ``key`` (and globally) is available."""
+        """Wait until the next slot for ``key`` (and globally) is available.
+
+        The reservation happens under a lock: without it, concurrent senders read the
+        same slot before sleeping and wake up together, bursting past the budget.
+        """
         chat_key = str(key or "-")
-        now = self._clock()
-        wait = max(0.0, self._next_global - now, self._next_chat.get(chat_key, 0.0) - now)
-        if wait > 0:
-            await self._sleep(wait)
+        async with self._lock:
             now = self._clock()
-        self._next_global = max(now, self._next_global) + self._global_interval
-        self._next_chat[chat_key] = max(now, self._next_chat.get(chat_key, 0.0)) + self._per_chat_interval
-        self._evict(now)
+            wait = max(0.0, self._next_global - now, self._next_chat.get(chat_key, 0.0) - now)
+            if wait > 0:
+                await self._sleep(wait)
+                now = self._clock()
+            self._next_global = max(now, self._next_global) + self._global_interval
+            self._next_chat[chat_key] = max(now, self._next_chat.get(chat_key, 0.0)) + self._per_chat_interval
+            self._evict(now)

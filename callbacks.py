@@ -46,9 +46,9 @@ class CallbackRegistry:
 
     def put(self, kind: str, chat_id: str, **kwargs: Any) -> str:
         self._purge()
-        token = secrets.token_hex(4)
+        token = secrets.token_hex(8)  # 64 bits: a guessed token must not open a card
         while token in self._entries:
-            token = secrets.token_hex(4)
+            token = secrets.token_hex(8)
         self._entries[token] = CallbackEntry(kind=kind, chat_id=str(chat_id), **kwargs)
         self._purge()
         return token

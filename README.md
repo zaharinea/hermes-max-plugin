@@ -75,6 +75,7 @@ curl --cacert ~/.hermes/max/certs/russian_trusted_root_ca_pem.crt \
 | `MAX_REGISTER_COMMANDS` | `true` | Показывать меню команд бота (`PATCH /me/commands`) |
 | `MAX_DEBUG_UPDATES` | `false` | Писать тип и структуру каждого update (без текста), только для отладки |
 | `MAX_USE_BUILTIN_TRANSCRIPTION` | `true` | Брать расшифровку из вложения MAX; `false` — всегда локальный STT |
+| `MAX_SANITIZE_ERRORS` | `true` | Вырезать URL и токены из серверных ошибок до записи в лог |
 | `MAX_STATE_PATH` | `$HERMES_HOME/max/state.json` | Файл marker/журнала |
 
 ## config.yaml

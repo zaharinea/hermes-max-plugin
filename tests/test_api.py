@@ -151,6 +151,28 @@ async def test_set_commands_patch_body():
 
 
 @pytest.mark.asyncio
+async def test_error_text_sanitizing_is_configurable():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400, json={"code": "bad", "message": "see https://cdn.test/x?token=secret for details"}
+        )
+
+    sanitized = await _error_message(handler, sanitize=True)
+    raw = await _error_message(handler, sanitize=False)
+    assert "https://" not in sanitized
+    assert "secret" not in sanitized
+    assert "https://cdn.test/x?token=secret" in raw
+
+
+async def _error_message(handler, *, sanitize: bool) -> str:
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    api = MaxApi("https://api.test", "tok", client, sanitize_errors=sanitize)
+    with pytest.raises(MaxApiError) as exc:
+        await api.get_me()
+    return str(exc.value)
+
+
+@pytest.mark.asyncio
 async def test_timeout_is_not_retryable():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timed out", request=request)

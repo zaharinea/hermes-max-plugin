@@ -79,6 +79,9 @@ _PLATFORM_HINT = (
 # full set stays reachable by typing any command (and via /commands).
 _MAX_MODEL_PROVIDERS = 29  # one button per row, MAX allows 30 rows
 _MAX_MODEL_ROWS = 25
+_MAX_KNOWN_CHATS = 500
+_MAX_ATTACHMENTS = 10
+_MAX_OUTBOUND_BYTES = 50 * 1024 * 1024
 _COMMAND_MENU = (
     {"name": "status", "description": "Состояние сессии, модели и контекста"},
     {"name": "new", "description": "Начать новую сессию"},
@@ -156,6 +159,7 @@ class MaxAdapter(BasePlatformAdapter):
         self._bot_name: str = ""
         self._known_chats: dict[str, dict[str, str]] = {}
         self._reveal_last: dict[str, float] = {}
+        self._marker_failures: int = 0
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -183,7 +187,9 @@ class MaxAdapter(BasePlatformAdapter):
                     pool=15.0,
                 ),
             )
-            self._api = MaxApi(settings.base_url, settings.token, self._http)
+            self._api = MaxApi(
+                settings.base_url, settings.token, self._http, sanitize_errors=settings.sanitize_errors
+            )
             me = await self._api.get_me()
         except MaxApiError as exc:
             await self._close_http()
@@ -345,6 +351,7 @@ class MaxAdapter(BasePlatformAdapter):
         cutoff_ms: Optional[float] = None
         if cold_start and self._settings.bootstrap_max_age > 0:
             cutoff_ms = (time.time() - self._settings.bootstrap_max_age) * 1000.0
+        failed = False
         for update in updates:
             if not isinstance(update, dict):
                 continue
@@ -359,11 +366,27 @@ class MaxAdapter(BasePlatformAdapter):
             except asyncio.CancelledError:
                 raise
             except Exception:
+                failed = True
                 logger.exception("[max] update processing failed (type=%s)", update.get("update_type"))
             await self._save_state()
         marker = data.get("marker")
         if marker is not None:
-            self._state.marker = marker
+            if failed and self._state.marker is not None and self._marker_failures < 3:
+                # Keep the cursor so the failed update is retried, but do not loop
+                # forever on a poison update.
+                self._marker_failures += 1
+                logger.warning(
+                    "[max] holding marker after a failed update (attempt %d/3)", self._marker_failures
+                )
+            elif failed and self._state.marker is not None:
+                logger.error(
+                    "[max] dropping a batch that failed %d times; advancing marker", self._marker_failures
+                )
+                self._state.marker = marker
+                self._marker_failures = 0
+            else:
+                self._state.marker = marker
+                self._marker_failures = 0
         await self._save_state()
 
     # -- dispatch ----------------------------------------------------------
@@ -423,13 +446,11 @@ class MaxAdapter(BasePlatformAdapter):
         mid = str(body.get("mid") or "")
 
         key = f"msg:{mid}" if mid else f"msg:{chat_id}:{update.get('timestamp')}"
-        if self._claim_update(key):
-            return
-
         sender_name = self._display_name(sender)
-        self._remember_chat(chat_id, chat_type, sender_name)
-
-        if self._is_whoami(text):
+        if self._is_whoami(text) and chat_type == "dm":
+            if self._claim_update(key):
+                return
+            self._remember_chat(chat_id, chat_type, sender_name)
             await self._reply_whoami(chat_id, sender_id)
             return
 
@@ -446,6 +467,14 @@ class MaxAdapter(BasePlatformAdapter):
                 return
             if self._settings.require_mention and not self._is_addressed(message, text):
                 return
+
+        # Journal only accepted updates: rejected senders must not dirty state.
+        if self._claim_update(key):
+            return
+
+        # Remember chats only after authorization: an unauthenticated sender must
+        # not grow adapter state.
+        self._remember_chat(chat_id, chat_type, sender_name)
 
         attachments = collect_attachments(message)
         if not attachments:
@@ -473,7 +502,8 @@ class MaxAdapter(BasePlatformAdapter):
         media_types: list[str] = []
         media_filenames: list[str] = []
         kinds: list[str] = []
-        for attachment in attachments:
+        total_media_bytes = 0
+        for attachment in attachments[:_MAX_ATTACHMENTS]:
             kinds.append(attachment.kind)
             data = await download_attachment(
                 self._http,  # type: ignore[arg-type]
@@ -484,6 +514,13 @@ class MaxAdapter(BasePlatformAdapter):
             )
             if not data:
                 continue
+            total_media_bytes += len(data)
+            if total_media_bytes > self._settings.download_max_bytes:
+                logger.warning(
+                    "[max] inbound media batch exceeded %d MB; skipping the rest",
+                    self._settings.download_max_mb,
+                )
+                break
             cached = await cache_media_bytes_async(
                 data,
                 filename=attachment.filename,
@@ -547,9 +584,9 @@ class MaxAdapter(BasePlatformAdapter):
         user = update.get("user") if isinstance(update.get("user"), dict) else {}
         user_id = str(user.get("user_id") or update.get("user_id") or "")
         chat_id = str(update.get("chat_id") or user_id)
-        if user_id:
+        if user_id and self._settings.user_allowed(user_id):
             self._remember_chat(chat_id, "dm", self._display_name(user))
-            logger.info("[max] bot_started chat_id=%s user_id=%s", chat_id, user_id)
+        logger.info("[max] bot_started chat_id=%s user_id=%s", chat_id, user_id or "?")
 
     async def _handle_bot_added(self, update: dict[str, Any]) -> None:
         chat_id = str(update.get("chat_id") or "")
@@ -588,12 +625,12 @@ class MaxAdapter(BasePlatformAdapter):
         chat_id = str(update.get("chat_id") or recipient.get("chat_id") or user_id)
 
         key = f"cb:{callback_id}" if callback_id else f"cb:{payload}:{update.get('timestamp')}"
-        if self._claim_update(key):
-            return
 
         if not user_id or not self._settings.user_allowed(user_id):
             logger.info("[max] ignoring button press from user_id=%s (not allowlisted)", user_id or "?")
             await self._answer_callback(callback_id, notification="Недостаточно прав.")
+            return
+        if self._claim_update(key):
             return
 
         parts = payload.split(":")
@@ -602,12 +639,29 @@ class MaxAdapter(BasePlatformAdapter):
             await self._answer_callback(callback_id, notification="Кнопка не распознана.")
             return
         token, action = parts[1], ":".join(parts[2:])
-        entry = self._callbacks.pop(token)
+        entry = self._callbacks.peek(token)
         if entry is None:
             await self._answer_callback(callback_id, notification="Кнопка устарела.")
             return
+        # Check actor and chat BEFORE consuming the single-use token: a foreign
+        # allowlisted user must not be able to burn the owner's button.
         if entry.user_id and entry.user_id != user_id:
+            logger.info("[max] callback user mismatch for token owner")
             await self._answer_callback(callback_id, notification="Недостаточно прав.")
+            return
+        if entry.chat_id and str(entry.chat_id) != chat_id:
+            logger.info("[max] callback chat mismatch (card=%s press=%s)", entry.chat_id, chat_id)
+            await self._answer_callback(callback_id, notification="Недостаточно прав.")
+            return
+        native_type = str(recipient.get("chat_type") or ("dialog" if not chat_id.startswith("-") else "chat"))
+        if native_type != "dialog":
+            if self._settings.group_allowed_chats and chat_id not in self._settings.group_allowed_chats:
+                logger.info("[max] callback from group %s not in MAX_GROUP_ALLOWED_CHATS", chat_id)
+                await self._answer_callback(callback_id, notification="Недостаточно прав.")
+                return
+        entry = self._callbacks.pop(token)
+        if entry is None:
+            await self._answer_callback(callback_id, notification="Кнопка устарела.")
             return
 
         if entry.kind == "approval":
@@ -686,7 +740,12 @@ class MaxAdapter(BasePlatformAdapter):
             await self._answer_callback(callback_id, notification="Некорректный вариант.")
             return
         callback = entry.on_choice_selected
-        if callback is not None and self._is_reasoning_value(value) and user_id:
+        if (
+            callback is not None
+            and user_id
+            and (entry.extra or {}).get("reasoning_picker")
+            and self._is_reasoning_value(value)
+        ):
             # Second-level menu: scope is chosen inside the card, not by a chat button.
             token = self._callbacks.put(
                 "scope_choice",
@@ -768,15 +827,25 @@ class MaxAdapter(BasePlatformAdapter):
         media_paths = list(iter_media_refs(content))
         chunks = render_chunks(content, self._settings.format, self.MAX_MESSAGE_LENGTH)
         uploaded: list[dict[str, Any]] = []
+        upload_failures = 0
         for path in media_paths:
             attachment = await self._upload_path(path)
             if attachment is not None:
                 uploaded.append(attachment)
+            else:
+                upload_failures += 1
+        if upload_failures:
+            logger.warning("[max] %d of %d media uploads failed", upload_failures, len(media_paths))
+        if upload_failures and not uploaded and not (content or "").strip():
+            return SendResult(
+                success=False, error="MAX media upload failed", retryable=True, error_kind="transient"
+            )
         if not chunks and not uploaded:
             return SendResult(success=True, message_id=None)
         if not chunks:
             chunks = [""]
         delivered: list[str] = []
+        tail_uncertain = False
         for index, chunk in enumerate(chunks):
             await self._limiter.acquire(str(chat_id))
             try:
@@ -791,7 +860,9 @@ class MaxAdapter(BasePlatformAdapter):
                 failure = self._classify_send_error(exc)
                 if delivered:
                     undelivered = chunks[index:]
-                    return self._with_partial_send(failure, undelivered, delivered, tail_certain=True)
+                    return self._with_partial_send(
+                        failure, undelivered, delivered, tail_certain=not tail_uncertain and not exc.timed_out
+                    )
                 return failure
             mid = (
                 (((result.get("message") or {}).get("body") or {}).get("mid"))
@@ -800,6 +871,10 @@ class MaxAdapter(BasePlatformAdapter):
             )
             if mid:
                 delivered.append(str(mid))
+            else:
+                # A 2xx without an id still reaches the user; the tail is no longer
+                # certain-undelivered, so never offer it for blind resumption.
+                tail_uncertain = True
         return SendResult(
             success=True,
             message_id=delivered[-1] if delivered else None,
@@ -915,7 +990,9 @@ class MaxAdapter(BasePlatformAdapter):
         if self._api is None:
             return SendResult(success=False, error="MAX adapter is not connected", retryable=True)
         chunks = render_chunks(content, self._settings.format, self.MAX_MESSAGE_LENGTH)
-        text = chunks[0] if chunks else ""
+        if not chunks:
+            chunks = [""]
+        text = chunks[0]
         try:
             await self._limiter.acquire(str(chat_id))
             await self._api.edit_message(
@@ -925,7 +1002,34 @@ class MaxAdapter(BasePlatformAdapter):
             )
         except MaxApiError as exc:
             return self._classify_send_error(exc)
-        return SendResult(success=True, message_id=str(message_id))
+        if len(chunks) == 1:
+            return SendResult(success=True, message_id=str(message_id))
+        # Editing only the first chunk would silently drop the tail of a long
+        # streamed answer, so the remainder goes out as follow-up messages.
+        delivered = [str(message_id)]
+        for index, chunk in enumerate(chunks[1:], start=1):
+            await self._limiter.acquire(str(chat_id))
+            try:
+                result = await self._api.send_message(
+                    chat_id=str(chat_id),
+                    text=chunk,
+                    fmt=self._settings.format if self._settings.format in {"html", "markdown"} else None,
+                    notify=self._settings.notify,
+                )
+            except MaxApiError as exc:
+                failure = self._classify_send_error(exc)
+                return self._with_partial_send(
+                    failure, chunks[index:], delivered, tail_certain=not exc.timed_out
+                )
+            message = result.get("message") if isinstance(result.get("message"), dict) else {}
+            body = message.get("body") if isinstance(message.get("body"), dict) else {}
+            if body.get("mid"):
+                delivered.append(str(body["mid"]))
+        return SendResult(
+            success=True,
+            message_id=delivered[-1],
+            continuation_message_ids=tuple(delivered[:-1]),
+        )
 
     async def delete_message(self, chat_id: str, message_id: str) -> bool:
         if self._api is None:
@@ -942,6 +1046,16 @@ class MaxAdapter(BasePlatformAdapter):
     async def _upload_path(self, path: str, kind: Optional[str] = None) -> Optional[dict[str, Any]]:
         file_path = Path(path).expanduser()
         if not file_path.is_file() or self._api is None:
+            return None
+        try:
+            if file_path.stat().st_size > _MAX_OUTBOUND_BYTES:
+                logger.warning(
+                    "[max] refusing to upload %s: larger than %d MB",
+                    file_path.name,
+                    _MAX_OUTBOUND_BYTES // (1024 * 1024),
+                )
+                return None
+        except OSError:
             return None
         data = await asyncio.to_thread(file_path.read_bytes)
         guessed_kind = kind or self._kind_for_suffix(file_path.suffix.lower())
@@ -1043,6 +1157,11 @@ class MaxAdapter(BasePlatformAdapter):
         file_path = Path(path).expanduser()
         if not file_path.is_file():
             return SendResult(success=False, error="MAX media file not found", retryable=False)
+        try:
+            if file_path.stat().st_size > _MAX_OUTBOUND_BYTES:
+                return SendResult(success=False, error="MAX media file is too large", retryable=False)
+        except OSError:
+            return SendResult(success=False, error="MAX media file is not readable", retryable=False)
         data = await asyncio.to_thread(file_path.read_bytes)
         attachment = await upload_attachment(
             self._api,
@@ -1276,6 +1395,9 @@ class MaxAdapter(BasePlatformAdapter):
         def _apply(_chat_id: str, _value: str) -> Any:
             return callback(entry.chat_id, model, provider)
 
+        # A model id is interpolated into a slash command; refuse values that could
+        # parse as flags or split into another command.
+        can_global = bool(user_id) and self._safe_command_value(model)
         token = self._callbacks.put(
             "scope_choice",
             chat_id=entry.chat_id,
@@ -1284,13 +1406,12 @@ class MaxAdapter(BasePlatformAdapter):
                 "apply": _apply,
                 "value": model,
                 "label": model,
-                "command": f"/model --global {model}",
+                "command": f"/model --global {model}" if can_global else "",
             },
         )
-        rows = [
-            [{"type": "callback", "text": "✅ Только эта сессия", "payload": f"mx:{token}:s"}],
-            [{"type": "callback", "text": "🌐 Сделать глобальной", "payload": f"mx:{token}:g"}],
-        ]
+        rows = [[{"type": "callback", "text": "✅ Только эта сессия", "payload": f"mx:{token}:s"}]]
+        if can_global:
+            rows.append([{"type": "callback", "text": "🌐 Сделать глобальной", "payload": f"mx:{token}:g"}])
         await self._answer_callback(
             callback_id,
             message={
@@ -1340,10 +1461,29 @@ class MaxAdapter(BasePlatformAdapter):
             return
         await self._answer_callback(callback_id, notification="Кнопка не распознана.")
 
+    @staticmethod
+    def _looks_like_reasoning(title: str) -> bool:
+        lowered = str(title or "").lower()
+        return "reasoning" in lowered or "рассужд" in lowered
+
+    @staticmethod
+    def _safe_command_value(value: str) -> bool:
+        text = str(value or "")
+        return (
+            bool(text) and not text.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in text)
+        )
+
     async def _dispatch_synthetic_command(self, chat_id: str, command: str, user_id: str) -> None:
         """Run a gateway command (e.g. ``/model --global …``) as if the owner typed it."""
         known = self._known_chats.get(str(chat_id)) or {}
         chat_type = known.get("type") or ("group" if str(chat_id).startswith("-") else "dm")
+        if (
+            chat_type == "group"
+            and self._settings.group_allowed_chats
+            and str(chat_id) not in self._settings.group_allowed_chats
+        ):
+            logger.warning("[max] refusing synthetic command in non-allowlisted group %s", chat_id)
+            return
         source = self.build_source(
             chat_id=str(chat_id),
             chat_name=known.get("name") or None,
@@ -1378,6 +1518,7 @@ class MaxAdapter(BasePlatformAdapter):
             session_key=session_key,
             choices=list(choices),
             on_choice_selected=on_choice_selected,
+            extra={"reasoning_picker": self._looks_like_reasoning(title)},
         )
         rows: list[list[dict[str, Any]]] = []
         for index, choice in enumerate(choices):
@@ -1429,6 +1570,9 @@ class MaxAdapter(BasePlatformAdapter):
             entry["name"] = title
         entry.setdefault("type", chat_type)
         self._known_chats[chat_id] = entry
+        # Hard bound: the map is diagnostic/only for titles, never worth unbounded growth.
+        while len(self._known_chats) > _MAX_KNOWN_CHATS:
+            self._known_chats.pop(next(iter(self._known_chats)), None)
 
     def _chat_name(self, chat_id: str, sender_name: str, chat_type: str) -> str:
         known = self._known_chats.get(chat_id) or {}

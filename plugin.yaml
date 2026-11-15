@@ -127,6 +127,10 @@ optional_env:
     description: "Use the transcript MAX ships with audio attachments (default: true). false = always run Hermes local STT."
     prompt: "Use MAX built-in transcription? (true/false)"
     password: false
+  - name: MAX_SANITIZE_ERRORS
+    description: "Redact URLs and signed-URL tokens from server error text before logging (default: true)"
+    prompt: "Sanitize server errors? (true/false)"
+    password: false
   - name: MAX_STATE_PATH
     description: "Override the marker/dedup state file path (default: $HERMES_HOME/max/state.json)"
     prompt: "State file path"

@@ -58,7 +58,7 @@ async def standalone_send(
             connect=15.0, read=settings.http_timeout, write=settings.http_timeout, pool=15.0
         ),
     )
-    api = MaxApi(settings.base_url, settings.token, client)
+    api = MaxApi(settings.base_url, settings.token, client, sanitize_errors=settings.sanitize_errors)
     try:
         uploaded: list[dict[str, Any]] = []
         for item in media_files or []:

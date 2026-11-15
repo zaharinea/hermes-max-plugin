@@ -8,9 +8,30 @@ pre-signed URL deliberately pass none.
 
 from __future__ import annotations
 
+import asyncio
+import re
 from typing import Any, Optional
 
 import httpx
+
+_URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_SIGNATURE_RE = re.compile(r"(token|signature|sig|access_token|authorization)=[^\s&]+", re.IGNORECASE)
+_MAX_ERROR_TEXT = 200
+
+
+def _sanitize(text: str, *, enabled: bool = True) -> str:
+    """Server-provided error text without URLs or signed-URL tokens, bounded in length."""
+    cleaned = str(text or "")
+    if enabled:
+        cleaned = _URL_RE.sub("<url>", cleaned)
+        cleaned = _SIGNATURE_RE.sub(r"\1=<redacted>", cleaned)
+        return cleaned[:_MAX_ERROR_TEXT]
+    return cleaned[:2000]
+
+
+def _is_attachment_not_ready(exc: "MaxApiError") -> bool:
+    text = f"{exc.code or ''} {exc.message or ''}".lower()
+    return "attachment" in text and ("not ready" in text or "not.ready" in text or "not_ready" in text)
 
 
 class MaxApiError(Exception):
@@ -34,7 +55,7 @@ class MaxApiError(Exception):
         self.retry_after = retry_after
         self.timed_out = timed_out
 
-    def __str__(self) -> str:  # keep tokens/signed URLs out of logs
+    def __str__(self) -> str:  # message was already sanitized at creation
         parts = []
         if self.status:
             parts.append(f"HTTP {self.status}")
@@ -54,7 +75,7 @@ def _retry_after(response: httpx.Response) -> Optional[float]:
         return None
 
 
-def _error_from_response(response: httpx.Response) -> MaxApiError:
+def _error_from_response(response: httpx.Response, *, sanitize: bool = True) -> MaxApiError:
     code: Optional[str] = None
     message = response.reason_phrase or "request failed"
     try:
@@ -66,14 +87,21 @@ def _error_from_response(response: httpx.Response) -> MaxApiError:
         pass
     status = response.status_code
     retryable = status == 429 or status >= 500
-    return MaxApiError(status, code, message, retryable=retryable, retry_after=_retry_after(response))
+    return MaxApiError(
+        status,
+        code,
+        _sanitize(message, enabled=sanitize),
+        retryable=retryable,
+        retry_after=_retry_after(response),
+    )
 
 
 class MaxApi:
-    def __init__(self, base_url: str, token: str, client: httpx.AsyncClient):
+    def __init__(self, base_url: str, token: str, client: httpx.AsyncClient, *, sanitize_errors: bool = True):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.client = client
+        self.sanitize_errors = bool(sanitize_errors)
 
     @property
     def _auth(self) -> dict[str, str]:
@@ -104,7 +132,7 @@ class MaxApi:
         except httpx.HTTPError as exc:
             raise MaxApiError(None, "network", type(exc).__name__, retryable=True) from exc
         if response.status_code >= 400:
-            raise _error_from_response(response)
+            raise _error_from_response(response, sanitize=self.sanitize_errors)
         if response.status_code == 204 or not response.content:
             return {}
         try:
@@ -145,7 +173,16 @@ class MaxApi:
             body["attachments"] = attachments
         if link:
             body["link"] = link
-        return await self._request("POST", "/messages", params={"chat_id": chat_id}, json=body)
+        # A freshly uploaded attachment may still be processing server-side; MAX
+        # answers 400 attachment.not.ready and expects a short retry.
+        for attempt in range(4):
+            try:
+                return await self._request("POST", "/messages", params={"chat_id": chat_id}, json=body)
+            except MaxApiError as exc:
+                if attempt < 3 and _is_attachment_not_ready(exc):
+                    await asyncio.sleep(0.5 * (2**attempt))
+                    continue
+                raise
 
     async def edit_message(
         self,
@@ -200,7 +237,7 @@ class MaxApi:
         except httpx.HTTPError as exc:
             raise MaxApiError(None, "network", type(exc).__name__, retryable=True) from exc
         if response.status_code >= 400:
-            raise _error_from_response(response)
+            raise _error_from_response(response, sanitize=self.sanitize_errors)
         try:
             payload = response.json()
         except ValueError:

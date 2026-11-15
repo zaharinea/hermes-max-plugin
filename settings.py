@@ -97,6 +97,7 @@ class MaxSettings:
     register_commands: bool = True
     debug_updates: bool = False
     use_builtin_transcription: bool = True
+    sanitize_errors: bool = True
     state_path: Path = field(default_factory=default_state_path)
 
     @property
@@ -173,5 +174,6 @@ class MaxSettings:
             use_builtin_transcription=_bool(
                 get("use_builtin_transcription", "MAX_USE_BUILTIN_TRANSCRIPTION", ""), True
             ),
+            sanitize_errors=_bool(get("sanitize_errors", "MAX_SANITIZE_ERRORS", ""), True),
             state_path=state_path,
         )

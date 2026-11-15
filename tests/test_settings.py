@@ -83,3 +83,8 @@ def test_builtin_transcription_flag():
         ).use_builtin_transcription
         is False
     )
+
+
+def test_sanitize_errors_flag():
+    assert MaxSettings.from_config(FakeConfig(extra={})).sanitize_errors is True
+    assert MaxSettings.from_config(FakeConfig(extra={"sanitize_errors": "false"})).sanitize_errors is False
