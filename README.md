@@ -132,6 +132,11 @@ Bot API MAX не отдаёт номер телефона. Владелец пи
 
 ## Разработка
 
+Коммиты — [Conventional Commits](https://www.conventionalcommits.org/) без ключа
+задачи: `feat(max): …`, `fix(max): …`, `ci(release): …`. Релизный workflow
+сам выбирает версию по типам коммитов (feat → minor, fix/perf/build/docs →
+patch, `!` → major) и создаёт тег `vX.Y.Z` с заметками GitHub.
+
 ```sh
 pytest -q
 ruff check .

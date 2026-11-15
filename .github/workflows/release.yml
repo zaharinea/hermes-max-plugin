@@ -23,9 +23,9 @@ jobs:
           last=$(git describe --tags --abbrev=0 2>/dev/null || true)
           range=${last:+$last..HEAD}
           log=$(git log ${range:-HEAD} --format=%s)
-          breaking=$(printf '%s\n' "$log" | grep -cE '^\[[^]]+\][[:space:]]+[a-z]+(\([^)]*\))?!:' || true)
-          feat=$(printf '%s\n' "$log" | grep -cE '^\[[^]]+\][[:space:]]+feat(\([^)]*\))?:' || true)
-          fix=$(printf '%s\n' "$log" | grep -cE '^\[[^]]+\][[:space:]]+(fix|perf|build|docs|revert)(\([^)]*\))?:' || true)
+          breaking=$(printf '%s\n' "$log" | grep -cE '^(\[[^]]+\][[:space:]]+)?[a-z]+(\([^)]*\))?!:' || true)
+          feat=$(printf '%s\n' "$log" | grep -cE '^(\[[^]]+\][[:space:]]+)?feat(\([^)]*\))?:' || true)
+          fix=$(printf '%s\n' "$log" | grep -cE '^(\[[^]]+\][[:space:]]+)?(fix|perf|build|docs|revert)(\([^)]*\))?:' || true)
           if [ -z "$last" ]; then base="0.0.0"; else base="${last#v}"; fi
           IFS=. read -r major minor patch <<< "$base"
           if [ "$breaking" -gt 0 ]; then
