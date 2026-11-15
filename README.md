@@ -145,7 +145,7 @@ python3 -m compileall -q .
 
 Тесты импортируют `gateway.*` из hermes-agent; полный прогон — на checkout того
 же коммита в отдельном окружении (`scripts/run_tests.sh`, временный
-`HERMES_HOME`).
+`HERMES_HOME`). Матрица сквозных проверок — [`docs/e2e-scenarios.md`](docs/e2e-scenarios.md).
 
 ## Лицензия
 
