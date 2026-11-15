@@ -76,6 +76,8 @@ _PLATFORM_HINT = (
 )
 # Curated menu: MAX allows 32 entries, but a short list is easier to use. The
 # full set stays reachable by typing any command (and via /commands).
+_MAX_MODEL_PROVIDERS = 29  # one button per row, MAX allows 30 rows
+_MAX_MODEL_ROWS = 25
 _COMMAND_MENU = (
     {"name": "status", "description": "Состояние сессии, модели и контекста"},
     {"name": "new", "description": "Начать новую сессию"},
@@ -594,11 +596,11 @@ class MaxAdapter(BasePlatformAdapter):
             return
 
         parts = payload.split(":")
-        if len(parts) != 3 or parts[0] != "mx":
+        if len(parts) < 3 or parts[0] != "mx":
             logger.debug("[max] unknown callback payload shape")
             await self._answer_callback(callback_id, notification="Кнопка не распознана.")
             return
-        token, action = parts[1], parts[2]
+        token, action = parts[1], ":".join(parts[2:])
         entry = self._callbacks.pop(token)
         if entry is None:
             await self._answer_callback(callback_id, notification="Кнопка устарела.")
@@ -613,6 +615,10 @@ class MaxAdapter(BasePlatformAdapter):
             await self._resolve_clarify(entry, action, callback_id)
         elif entry.kind == "choice":
             await self._resolve_choice(entry, action, callback_id, chat_id)
+        elif entry.kind == "model_provider":
+            await self._resolve_model_provider(entry, action, callback_id)
+        elif entry.kind == "model_choice":
+            await self._resolve_model_choice(entry, action, callback_id)
         else:
             await self._answer_callback(callback_id, notification="Кнопка не распознана.")
 
@@ -1137,6 +1143,104 @@ class MaxAdapter(BasePlatformAdapter):
         numbered = "\n".join(f"{i}. {choice}" for i, choice in enumerate(choices, start=1))
         text = f"❓ {question}\n\n{numbered}"[:3500]
         return await self._send_payload(chat_id, text, attachments=[self._keyboard(rows)], raw_text=True)
+
+    async def send_model_picker(
+        self,
+        chat_id: str,
+        providers: list,
+        current_model: str,
+        current_provider: str,
+        session_key: str,
+        on_model_selected,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> SendResult:
+        """Two-step provider → model picker, edited in place through ``POST /answers``."""
+        if not providers:
+            return SendResult(success=False, error="No providers")
+        state = {
+            "providers": list(providers),
+            "current_model": current_model,
+            "current_provider": current_provider,
+            "session_key": session_key,
+            "on_model_selected": on_model_selected,
+        }
+        token = self._callbacks.put("model_provider", chat_id=chat_id, session_key=session_key, extra=state)
+        rows: list[list[dict[str, Any]]] = []
+        for index, provider in enumerate(providers[:_MAX_MODEL_PROVIDERS]):
+            name = str(provider.get("name") or provider.get("slug") or "?")
+            count = provider.get("total_models") or len(provider.get("models") or [])
+            label = f"{name} ({count})"
+            if provider.get("is_current") or str(provider.get("slug")) == str(current_provider):
+                label = f"✓ {label}"
+            rows.append([{"type": "callback", "text": label[:128], "payload": f"mx:{token}:p:{index}"}])
+        text = (
+            f"⚙ Выбор модели\nТекущая: {current_model or '—'}\n"
+            f"Провайдер: {current_provider or '—'}\n\nВыберите провайдера:"
+        )
+        return await self._send_payload(chat_id, text, attachments=[self._keyboard(rows)], raw_text=True)
+
+    async def _resolve_model_provider(self, entry: Any, action: str, callback_id: str) -> None:
+        try:
+            index = int(action.split(":", 1)[1])
+        except (IndexError, ValueError):
+            await self._answer_callback(callback_id, notification="Некорректный провайдер.")
+            return
+        state = dict(entry.extra or {})
+        providers = list(state.get("providers") or [])
+        if index < 0 or index >= len(providers):
+            await self._answer_callback(callback_id, notification="Некорректный провайдер.")
+            return
+        provider = providers[index]
+        models = [str(model) for model in (provider.get("models") or [])]
+        if not models:
+            await self._answer_callback(callback_id, notification="У провайдера нет моделей.")
+            return
+        state["models"] = models
+        state["provider_slug"] = str(provider.get("slug") or "")
+        state["provider_name"] = str(provider.get("name") or provider.get("slug") or "")
+        token = self._callbacks.put(
+            "model_choice", chat_id=entry.chat_id, session_key=entry.session_key, extra=state
+        )
+        shown = models[:_MAX_MODEL_ROWS]
+        rows = [
+            [{"type": "callback", "text": model[:128], "payload": f"mx:{token}:m:{model_index}"}]
+            for model_index, model in enumerate(shown)
+        ]
+        text = f"⚙ {state['provider_name']}\nМодель (текущая: {state.get('current_model') or '—'}):"
+        if len(models) > len(shown):
+            text += f"\n\nПоказаны первые {len(shown)} из {len(models)}; остальные — /model <имя>."
+        await self._answer_callback(
+            callback_id, notification=None, message={"text": text, "attachments": [self._keyboard(rows)]}
+        )
+
+    async def _resolve_model_choice(self, entry: Any, action: str, callback_id: str) -> None:
+        try:
+            index = int(action.split(":", 1)[1])
+        except (IndexError, ValueError):
+            await self._answer_callback(callback_id, notification="Некорректная модель.")
+            return
+        state = dict(entry.extra or {})
+        models = list(state.get("models") or [])
+        if index < 0 or index >= len(models):
+            await self._answer_callback(callback_id, notification="Некорректная модель.")
+            return
+        model = models[index]
+        provider = str(state.get("provider_slug") or "")
+        result_text = "Готово."
+        callback = state.get("on_model_selected")
+        if callback is not None:
+            try:
+                result = callback(entry.chat_id, model, provider)
+                if asyncio.iscoroutine(result):
+                    result = await result
+                if isinstance(result, str) and result.strip():
+                    result_text = result.strip()
+            except Exception as exc:
+                logger.warning("[max] model selection failed: %s", type(exc).__name__)
+                result_text = "Не удалось переключить модель."
+        await self._answer_callback(
+            callback_id, notification=result_text[:120], message={"text": result_text, "attachments": []}
+        )
 
     async def send_choice_picker(
         self,

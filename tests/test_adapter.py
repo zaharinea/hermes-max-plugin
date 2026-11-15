@@ -263,6 +263,35 @@ async def test_caption_and_transcription_are_merged(adapter, message_update):
     assert "Привет из MAX" in events[0].text
 
 
+@pytest.mark.asyncio
+async def test_model_picker_provider_then_model(adapter):
+    selected = []
+
+    async def on_select(chat_id, model, provider):
+        selected.append((chat_id, model, provider))
+        return f"Модель: {model}"
+
+    providers = [
+        {"slug": "p1", "name": "Provider 1", "models": ["m1", "m2"], "is_current": True},
+        {"slug": "p2", "name": "Provider 2", "models": ["m3"], "total_models": 1},
+    ]
+    result = await adapter.send_model_picker(str(CHAT), providers, "m1", "p1", "s1", on_select)
+    assert result.success
+    keyboard = adapter._api.sent[-1]["attachments"][0]["payload"]["buttons"]
+    assert keyboard[0][0]["text"].startswith("✓")
+    token = keyboard[0][0]["payload"].split(":")[1]
+
+    await adapter._handle_message_callback(_callback_update(f"mx:{token}:p:0", callback_id="cb-p"))
+    card = adapter._api.answers[-1]["message"]
+    model_rows = card["attachments"][0]["payload"]["buttons"]
+    assert [row[0]["text"] for row in model_rows] == ["m1", "m2"]
+    model_token = model_rows[0][0]["payload"].split(":")[1]
+
+    await adapter._handle_message_callback(_callback_update(f"mx:{model_token}:m:1", callback_id="cb-m"))
+    assert selected == [(str(CHAT), "m2", "p1")]
+    assert "Модель: m2" in adapter._api.answers[-1]["message"]["text"]
+
+
 def test_menu_commands_are_capped_and_valid(adapter):
     rows = adapter._menu_commands()
     assert len(rows) == 20
