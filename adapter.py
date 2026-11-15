@@ -49,6 +49,7 @@ from .httpclient import new_http_client
 from .media import (
     Attachment,
     collect_attachments,
+    collect_media_any,
     collect_voice_fallback,
     download_attachment,
     upload_attachment,
@@ -72,6 +73,14 @@ _PLATFORM_HINT = (
     "writing MEDIA:/absolute/path on its own line; images, video, audio and documents are "
     "uploaded as attachments. In group chats the bot answers only when mentioned unless "
     "MAX_REQUIRE_MENTION is disabled. Approval and clarify prompts use inline buttons."
+)
+_COMMAND_MENU = (
+    {"name": "start", "description": "Начать диалог"},
+    {"name": "status", "description": "Состояние агента и шлюза"},
+    {"name": "new", "description": "Новая сессия"},
+    {"name": "reset", "description": "Сбросить сессию"},
+    {"name": "model", "description": "Выбрать модель"},
+    {"name": "help", "description": "Список команд"},
 )
 
 
@@ -201,6 +210,7 @@ class MaxAdapter(BasePlatformAdapter):
             self._state.recent.clear()
         self._state.bot_id = self._bot_id
         await self._save_state()
+        await self._register_commands()
 
         self._mark_connected()
         self._stop_event = asyncio.Event()
@@ -208,6 +218,16 @@ class MaxAdapter(BasePlatformAdapter):
             self._poll_task = asyncio.create_task(self._poll_loop())
         logger.info("[max] connected as @%s (user_id=%s)", self._bot_username or "?", self._bot_id or "?")
         return True
+
+    async def _register_commands(self) -> None:
+        """Best-effort native command menu (``PATCH /me/commands``)."""
+        if not self._settings.register_commands or self._api is None:
+            return
+        try:
+            await self._api.set_commands(list(_COMMAND_MENU))
+            logger.info("[max] command menu registered (%d commands)", len(_COMMAND_MENU))
+        except MaxApiError as exc:
+            logger.debug("[max] command menu registration failed: %s", exc)
 
     async def disconnect(self) -> None:
         self._running = False
@@ -354,6 +374,11 @@ class MaxAdapter(BasePlatformAdapter):
         sender = message.get("sender") if isinstance(message.get("sender"), dict) else {}
         sender_id = str(sender.get("user_id") or "")
         if not sender_id or sender.get("is_bot") or (self._bot_id and sender_id == self._bot_id):
+            if not sender_id:
+                logger.info(
+                    "[max] message_created without sender (keys=%s) — cannot authorize; ignored",
+                    sorted(update)[:8],
+                )
             return
         recipient = message.get("recipient") if isinstance(message.get("recipient"), dict) else {}
         chat_id = str(update.get("chat_id") or recipient.get("chat_id") or sender_id)
@@ -391,6 +416,8 @@ class MaxAdapter(BasePlatformAdapter):
         attachments = collect_attachments(message)
         if not attachments:
             attachments = collect_voice_fallback(message)
+        if not attachments:
+            attachments = collect_media_any(update)
 
         media_urls: list[str] = []
         media_types: list[str] = []

@@ -209,6 +209,10 @@ class MaxApi:
 
     # -- chats ------------------------------------------------------------
 
+    async def set_commands(self, commands: list[dict[str, str]]) -> dict[str, Any]:
+        """PATCH /me/commands — the native bot command menu."""
+        return await self._request("PATCH", "/me/commands", json={"commands": commands})
+
     async def get_chat(self, chat_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/chats/{chat_id}")
 

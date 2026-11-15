@@ -61,3 +61,10 @@ def test_user_allowed_wildcard_and_list():
 def test_token_falls_back_to_platform_token():
     settings = MaxSettings.from_config(FakeConfig(extra={}, token="from-config"))
     assert settings.token == "from-config"
+
+
+def test_register_commands_flag():
+    assert MaxSettings.from_config(FakeConfig(extra={})).register_commands is True
+    assert (
+        MaxSettings.from_config(FakeConfig(extra={"register_commands": "false"})).register_commands is False
+    )

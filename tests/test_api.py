@@ -134,6 +134,23 @@ async def test_upload_file_sends_no_authorization():
 
 
 @pytest.mark.asyncio
+async def test_set_commands_patch_body():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["url"] = str(request.url)
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json={})
+
+    api = make_api(handler)
+    await api.set_commands([{"name": "status", "description": "Состояние"}])
+    assert captured["method"] == "PATCH"
+    assert captured["url"].endswith("/me/commands")
+    assert captured["body"] == {"commands": [{"name": "status", "description": "Состояние"}]}
+
+
+@pytest.mark.asyncio
 async def test_timeout_is_not_retryable():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timed out", request=request)

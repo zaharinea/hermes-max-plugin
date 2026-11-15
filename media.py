@@ -14,10 +14,24 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 import httpx
-from gateway.platforms._shared import send_error
 
-_KINDS = {"image", "video", "audio", "file"}
-_DOCUMENT_KINDS = {"file"}
+_KINDS = {"image", "video", "audio", "voice", "file"}
+_AUDIO_KINDS = {"audio", "voice"}
+_MEDIA_CONTAINERS = {"voice": "audio", "audio": "audio", "video": "video", "image": "image", "file": "file"}
+_CONTAINER_KEYS = (
+    "attachments",
+    "voice",
+    "audio",
+    "video",
+    "image",
+    "file",
+    "media",
+    "payload",
+    "message",
+    "link",
+    "reply",
+    "body",
+)
 _DEFAULT_MIME = {
     "image": "image/jpeg",
     "video": "video/mp4",
@@ -54,6 +68,12 @@ def _attachment_from(item: dict[str, Any]) -> Optional[Attachment]:
     payload = _payload(item)
     filename = str(payload.get("filename") or "")
     mime = str(payload.get("mime") or "") or mimetypes.guess_type(filename)[0] or ""
+    # MAX has no distinct "voice" type: voice notes arrive as "audio". Files with
+    # an audio MIME are promoted too, so the gateway's STT path sees them.
+    if kind in _AUDIO_KINDS:
+        kind = "audio"
+    elif kind == "file" and mime.startswith("audio/"):
+        kind = "audio"
     size: Optional[int]
     try:
         size = int(payload.get("size")) if payload.get("size") is not None else None
@@ -96,6 +116,47 @@ def collect_voice_fallback(message: dict[str, Any]) -> list[Attachment]:
             att = _attachment_from({"type": "audio", "payload": item})
             if att and (att.url or att.token):
                 found.append(att)
+    return found
+
+
+def collect_media_any(update: dict[str, Any], *, max_depth: int = 6) -> list[Attachment]:
+    """Walk the documented containers of an update looking for attachments.
+
+    MAX nests media differently for direct and forwarded messages (and voice
+    notes may sit at the update root). Only attachment-shaped dicts with an
+    explicit media ``type`` and a URL/token are taken — never arbitrary links.
+    """
+    found: list[Attachment] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add(attachment: Optional[Attachment]) -> None:
+        if attachment is None or not (attachment.url or attachment.token):
+            return
+        key = (attachment.kind, attachment.url, attachment.token)
+        if key not in seen:
+            seen.add(key)
+            found.append(attachment)
+
+    def walk(node: Any, depth: int) -> None:
+        if depth > max_depth:
+            return
+        if isinstance(node, list):
+            for item in node:
+                walk(item, depth + 1)
+            return
+        if not isinstance(node, dict):
+            return
+        add(_attachment_from(node))
+        for container in _CONTAINER_KEYS:
+            if container not in node:
+                continue
+            value = node[container]
+            hint = _MEDIA_CONTAINERS.get(container)
+            if hint and isinstance(value, dict):
+                add(_attachment_from({"type": hint, "payload": value}))
+            walk(value, depth + 1)
+
+    walk(update, 0)
     return found
 
 
@@ -187,8 +248,8 @@ async def upload_attachment(
 __all__ = [
     "Attachment",
     "collect_attachments",
+    "collect_media_any",
     "collect_voice_fallback",
     "download_attachment",
     "upload_attachment",
-    "send_error",
 ]
