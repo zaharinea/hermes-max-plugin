@@ -18,6 +18,7 @@ import random
 import re
 import ssl
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -614,11 +615,13 @@ class MaxAdapter(BasePlatformAdapter):
         elif entry.kind == "clarify":
             await self._resolve_clarify(entry, action, callback_id)
         elif entry.kind == "choice":
-            await self._resolve_choice(entry, action, callback_id, chat_id)
+            await self._resolve_choice(entry, action, callback_id, chat_id, user_id)
         elif entry.kind == "model_provider":
             await self._resolve_model_provider(entry, action, callback_id)
         elif entry.kind == "model_choice":
-            await self._resolve_model_choice(entry, action, callback_id)
+            await self._resolve_model_choice(entry, action, callback_id, user_id)
+        elif entry.kind == "global_command":
+            await self._resolve_global_command(entry, callback_id)
         else:
             await self._answer_callback(callback_id, notification="Кнопка не распознана.")
 
@@ -671,7 +674,9 @@ class MaxAdapter(BasePlatformAdapter):
         else:
             await self._answer_callback(callback_id, notification="Вопрос уже неактивен.")
 
-    async def _resolve_choice(self, entry: Any, action: str, callback_id: str, chat_id: str) -> None:
+    async def _resolve_choice(
+        self, entry: Any, action: str, callback_id: str, chat_id: str, user_id: str = ""
+    ) -> None:
         choices = list(entry.choices or [])
         try:
             index = int(action)
@@ -682,6 +687,7 @@ class MaxAdapter(BasePlatformAdapter):
             return
         result_text = "Готово."
         callback = entry.on_choice_selected
+        applied = False
         if callback is not None:
             try:
                 result = callback(chat_id, value)
@@ -689,14 +695,46 @@ class MaxAdapter(BasePlatformAdapter):
                     result = await result
                 if isinstance(result, str) and result.strip():
                     result_text = result.strip()
+                applied = True
             except Exception as exc:
                 logger.warning("[max] choice callback failed: %s", type(exc).__name__)
                 result_text = "Не удалось применить выбор."
+        attachments: Optional[list[dict[str, Any]]] = None
+        if applied and self._is_reasoning_value(value) and user_id:
+            token = self._callbacks.put(
+                "global_command",
+                chat_id=str(chat_id),
+                user_id=str(user_id),
+                extra={"command": f"/reasoning {value} --global"},
+            )
+            attachments = [
+                self._keyboard(
+                    [
+                        [
+                            {
+                                "type": "callback",
+                                "text": "🌐 Сделать глобальной",
+                                "payload": f"mx:{token}:g",
+                            }
+                        ]
+                    ]
+                )
+            ]
         await self._answer_callback(
             callback_id,
             notification=result_text[:120],
-            message={"text": result_text, "attachments": []},
+            message={"text": result_text, "attachments": attachments or []},
         )
+
+    @staticmethod
+    def _is_reasoning_value(value: str) -> bool:
+        try:
+            from hermes_constants import VALID_REASONING_EFFORTS
+
+            levels = {str(level) for level in VALID_REASONING_EFFORTS}
+        except Exception:
+            levels = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+        return str(value).lower() in levels
 
     async def _answer_callback(
         self,
@@ -1213,7 +1251,9 @@ class MaxAdapter(BasePlatformAdapter):
             callback_id, notification=None, message={"text": text, "attachments": [self._keyboard(rows)]}
         )
 
-    async def _resolve_model_choice(self, entry: Any, action: str, callback_id: str) -> None:
+    async def _resolve_model_choice(
+        self, entry: Any, action: str, callback_id: str, user_id: str = ""
+    ) -> None:
         try:
             index = int(action.split(":", 1)[1])
         except (IndexError, ValueError):
@@ -1228,6 +1268,7 @@ class MaxAdapter(BasePlatformAdapter):
         provider = str(state.get("provider_slug") or "")
         result_text = "Готово."
         callback = state.get("on_model_selected")
+        applied = False
         if callback is not None:
             try:
                 result = callback(entry.chat_id, model, provider)
@@ -1235,12 +1276,66 @@ class MaxAdapter(BasePlatformAdapter):
                     result = await result
                 if isinstance(result, str) and result.strip():
                     result_text = result.strip()
+                applied = True
             except Exception as exc:
                 logger.warning("[max] model selection failed: %s", type(exc).__name__)
                 result_text = "Не удалось переключить модель."
+        attachments: Optional[list[dict[str, Any]]] = None
+        if applied and user_id:
+            token = self._callbacks.put(
+                "global_command",
+                chat_id=entry.chat_id,
+                user_id=str(user_id),
+                extra={"command": f"/model --global {model}"},
+            )
+            attachments = [
+                self._keyboard(
+                    [
+                        [
+                            {
+                                "type": "callback",
+                                "text": "🌐 Сделать глобальной",
+                                "payload": f"mx:{token}:g",
+                            }
+                        ]
+                    ]
+                )
+            ]
         await self._answer_callback(
-            callback_id, notification=result_text[:120], message={"text": result_text, "attachments": []}
+            callback_id,
+            notification=result_text[:120],
+            message={"text": result_text, "attachments": attachments or []},
         )
+
+    async def _resolve_global_command(self, entry: Any, callback_id: str) -> None:
+        command = str((entry.extra or {}).get("command") or "")
+        user_id = str(entry.user_id or "")
+        if not command or not user_id or not self._settings.user_allowed(user_id):
+            await self._answer_callback(callback_id, notification="Недостаточно прав.")
+            return
+        await self._answer_callback(callback_id, notification="Применяю глобально…")
+        await self._dispatch_synthetic_command(entry.chat_id, command, user_id)
+
+    async def _dispatch_synthetic_command(self, chat_id: str, command: str, user_id: str) -> None:
+        """Run a gateway command (e.g. ``/model --global …``) as if the owner typed it."""
+        known = self._known_chats.get(str(chat_id)) or {}
+        chat_type = known.get("type") or ("group" if str(chat_id).startswith("-") else "dm")
+        source = self.build_source(
+            chat_id=str(chat_id),
+            chat_name=known.get("name") or None,
+            chat_type=chat_type,
+            user_id=str(user_id),
+            user_name="",
+            message_id=None,
+        )
+        event = MessageEvent(
+            text=command,
+            message_type=MessageType.TEXT,
+            user_id=str(user_id),
+            source=source,
+            message_id=f"synthetic:{uuid.uuid4().hex[:8]}",
+        )
+        await self.handle_message(event)
 
     async def send_choice_picker(
         self,

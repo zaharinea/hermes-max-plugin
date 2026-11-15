@@ -289,7 +289,39 @@ async def test_model_picker_provider_then_model(adapter):
 
     await adapter._handle_message_callback(_callback_update(f"mx:{model_token}:m:1", callback_id="cb-m"))
     assert selected == [(str(CHAT), "m2", "p1")]
-    assert "Модель: m2" in adapter._api.answers[-1]["message"]["text"]
+    answer = adapter._api.answers[-1]
+    assert "Модель: m2" in answer["message"]["text"]
+
+    # The chosen model can be promoted to the global default through the stock
+    # ``/model --global`` command.
+    global_row = answer["message"]["attachments"][0]["payload"]["buttons"][0][0]
+    assert "глобальной" in global_row["text"].lower()
+    synthetic = []
+    adapter.handle_message = lambda event: synthetic.append(event)  # type: ignore[method-assign]
+    global_token = global_row["payload"].split(":")[1]
+    await adapter._handle_message_callback(_callback_update(f"mx:{global_token}:g", callback_id="cb-g"))
+    assert synthetic and synthetic[0].text == "/model --global m2"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_choice_offers_global_button(adapter):
+    async def on_select(chat_id, value):
+        return f"Reasoning: {value}"
+
+    await adapter.send_choice_picker(
+        str(CHAT), "Reasoning", [{"value": "low"}, {"value": "high"}], "s1", on_select
+    )
+    keyboard = adapter._api.sent[-1]["attachments"][0]["payload"]["buttons"]
+    token = keyboard[1][0]["payload"].split(":")[1]
+    await adapter._handle_message_callback(_callback_update(f"mx:{token}:1", callback_id="cb-r"))
+    answer = adapter._api.answers[-1]
+    assert "Reasoning: high" in answer["message"]["text"]
+    global_row = answer["message"]["attachments"][0]["payload"]["buttons"][0][0]
+    synthetic = []
+    adapter.handle_message = lambda event: synthetic.append(event)  # type: ignore[method-assign]
+    global_token = global_row["payload"].split(":")[1]
+    await adapter._handle_message_callback(_callback_update(f"mx:{global_token}:g", callback_id="cb-rg"))
+    assert synthetic and synthetic[0].text == "/reasoning high --global"
 
 
 def test_menu_commands_are_capped_and_valid(adapter):
