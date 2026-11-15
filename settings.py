@@ -95,6 +95,7 @@ class MaxSettings:
     callback_ttl: float = 3600.0
     reveal_cooldown: int = 3600
     register_commands: bool = True
+    debug_updates: bool = False
     state_path: Path = field(default_factory=default_state_path)
 
     @property
@@ -167,5 +168,6 @@ class MaxSettings:
             callback_ttl=max(1.0, _float(get("callback_ttl", "MAX_CALLBACK_TTL_SECONDS", ""), 3600.0)),
             reveal_cooldown=max(0, _int(get("reveal_cooldown", "MAX_REVEAL_USER_ID_COOLDOWN", ""), 3600)),
             register_commands=_bool(get("register_commands", "MAX_REGISTER_COMMANDS", ""), True),
+            debug_updates=_bool(get("debug_updates", "MAX_DEBUG_UPDATES", ""), False),
             state_path=state_path,
         )

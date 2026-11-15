@@ -119,6 +119,10 @@ optional_env:
     description: "Register the native bot command menu via PATCH /me/commands (default: true)"
     prompt: "Register command menu? (true/false)"
     password: false
+  - name: MAX_DEBUG_UPDATES
+    description: "Log the type and shape of every inbound update (no message text). Debug only."
+    prompt: "Log update shapes? (true/false)"
+    password: false
   - name: MAX_STATE_PATH
     description: "Override the marker/dedup state file path (default: $HERMES_HOME/max/state.json)"
     prompt: "State file path"

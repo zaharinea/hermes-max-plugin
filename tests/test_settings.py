@@ -68,3 +68,8 @@ def test_register_commands_flag():
     assert (
         MaxSettings.from_config(FakeConfig(extra={"register_commands": "false"})).register_commands is False
     )
+
+
+def test_debug_updates_flag():
+    assert MaxSettings.from_config(FakeConfig(extra={})).debug_updates is False
+    assert MaxSettings.from_config(FakeConfig(extra={"debug_updates": "true"})).debug_updates is True

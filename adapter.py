@@ -346,6 +346,16 @@ class MaxAdapter(BasePlatformAdapter):
 
     async def _process_update(self, update: dict[str, Any]) -> None:
         utype = str(update.get("update_type") or update.get("type") or "")
+        if self._settings.debug_updates:
+            message = update.get("message") if isinstance(update.get("message"), dict) else {}
+            body = message.get("body") if isinstance(message.get("body"), dict) else {}
+            logger.info(
+                "[max] update type=%s keys=%s message_keys=%s body_keys=%s",
+                utype or "?",
+                sorted(update)[:12],
+                sorted(message)[:12],
+                sorted(body)[:12],
+            )
         if utype == "message_created":
             await self._handle_message_created(update)
         elif utype == "message_callback":
