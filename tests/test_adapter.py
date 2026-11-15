@@ -263,6 +263,15 @@ async def test_caption_and_transcription_are_merged(adapter, message_update):
     assert "Привет из MAX" in events[0].text
 
 
+def test_menu_commands_are_capped_and_valid(adapter):
+    rows = adapter._menu_commands()
+    assert rows
+    assert len(rows) <= 32
+    assert all(row["name"] and row["description"] for row in rows)
+    assert all(len(row["name"]) <= 64 and len(row["description"]) <= 128 for row in rows)
+    assert len({row["name"] for row in rows}) == len(rows)
+
+
 def test_kind_detection():
     from adapter import MaxAdapter
 

@@ -74,6 +74,7 @@ _PLATFORM_HINT = (
     "uploaded as attachments. In group chats the bot answers only when mentioned unless "
     "MAX_REQUIRE_MENTION is disabled. Approval and clarify prompts use inline buttons."
 )
+_MAX_MENU_COMMANDS = 32  # MAX caps the bot command list at 32 entries
 _COMMAND_MENU = (
     {"name": "start", "description": "Начать диалог"},
     {"name": "status", "description": "Состояние агента и шлюза"},
@@ -223,11 +224,35 @@ class MaxAdapter(BasePlatformAdapter):
         """Best-effort native command menu (``PATCH /me/commands``)."""
         if not self._settings.register_commands or self._api is None:
             return
+        commands = self._menu_commands()
         try:
-            await self._api.set_commands(list(_COMMAND_MENU))
-            logger.info("[max] command menu registered (%d commands)", len(_COMMAND_MENU))
+            await self._api.set_commands(commands)
+            logger.info("[max] command menu registered (%d commands)", len(commands))
         except MaxApiError as exc:
             logger.debug("[max] command menu registration failed: %s", exc)
+
+    def _menu_commands(self) -> list[dict[str, str]]:
+        """Core gateway commands (same source Telegram uses), capped at MAX's 32 slots."""
+        try:
+            from hermes_cli.commands_platforms import telegram_bot_commands
+
+            pairs = list(telegram_bot_commands(include_plugins=True))
+        except Exception:
+            pairs = [(row["name"], row["description"]) for row in _COMMAND_MENU]
+        rows: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for name, description in pairs:
+            clean = str(name or "").strip().lstrip("/")
+            desc = str(description or "").strip()
+            if not clean or not desc or clean in seen:
+                continue
+            seen.add(clean)
+            rows.append({"name": clean[:64], "description": desc[:128]})
+            if len(rows) >= _MAX_MENU_COMMANDS:
+                break
+        if rows:
+            return rows
+        return [dict(row) for row in _COMMAND_MENU]
 
     async def disconnect(self) -> None:
         self._running = False
