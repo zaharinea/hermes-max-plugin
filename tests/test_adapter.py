@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import sys
 import types
 
@@ -264,7 +265,7 @@ async def test_caption_and_transcription_are_merged(adapter, message_update):
 
 
 @pytest.mark.asyncio
-async def test_model_picker_provider_then_model(adapter):
+async def test_model_picker_scope_step(adapter):
     selected = []
 
     async def on_select(chat_id, model, provider):
@@ -275,51 +276,69 @@ async def test_model_picker_provider_then_model(adapter):
         {"slug": "p1", "name": "Provider 1", "models": ["m1", "m2"], "is_current": True},
         {"slug": "p2", "name": "Provider 2", "models": ["m3"], "total_models": 1},
     ]
-    result = await adapter.send_model_picker(str(CHAT), providers, "m1", "p1", "s1", on_select)
-    assert result.success
-    keyboard = adapter._api.sent[-1]["attachments"][0]["payload"]["buttons"]
-    assert keyboard[0][0]["text"].startswith("✓")
-    token = keyboard[0][0]["payload"].split(":")[1]
+    counter = itertools.count()
 
-    await adapter._handle_message_callback(_callback_update(f"mx:{token}:p:0", callback_id="cb-p"))
-    card = adapter._api.answers[-1]["message"]
-    model_rows = card["attachments"][0]["payload"]["buttons"]
-    assert [row[0]["text"] for row in model_rows] == ["m1", "m2"]
-    model_token = model_rows[0][0]["payload"].split(":")[1]
+    async def open_scope_card():
+        """provider step → model step → scope step; returns (session, global) tokens."""
+        await adapter.send_model_picker(str(CHAT), providers, "m1", "p1", "s1", on_select)
+        keyboard = adapter._api.sent[-1]["attachments"][0]["payload"]["buttons"]
+        provider_token = keyboard[0][0]["payload"].split(":")[1]
+        await adapter._handle_message_callback(
+            _callback_update(f"mx:{provider_token}:p:0", callback_id=f"cb-p{next(counter)}")
+        )
+        model_rows = adapter._api.answers[-1]["message"]["attachments"][0]["payload"]["buttons"]
+        assert [row[0]["text"] for row in model_rows] == ["m1", "m2"]
+        model_token = model_rows[1][0]["payload"].split(":")[1]
+        await adapter._handle_message_callback(
+            _callback_update(f"mx:{model_token}:m:1", callback_id=f"cb-m{next(counter)}")
+        )
+        scope_rows = adapter._api.answers[-1]["message"]["attachments"][0]["payload"]["buttons"]
+        assert "сессия" in scope_rows[0][0]["text"].lower()
+        assert "глобальной" in scope_rows[1][0]["text"].lower()
+        return scope_rows[0][0]["payload"].split(":")[1], scope_rows[1][0]["payload"].split(":")[1]
 
-    await adapter._handle_message_callback(_callback_update(f"mx:{model_token}:m:1", callback_id="cb-m"))
+    session_token, _ = await open_scope_card()
+    await adapter._handle_message_callback(_callback_update(f"mx:{session_token}:s", callback_id="cb-s"))
     assert selected == [(str(CHAT), "m2", "p1")]
-    answer = adapter._api.answers[-1]
-    assert "Модель: m2" in answer["message"]["text"]
+    assert "Модель: m2" in adapter._api.answers[-1]["message"]["text"]
 
-    # The chosen model can be promoted to the global default through the stock
-    # ``/model --global`` command.
-    global_row = answer["message"]["attachments"][0]["payload"]["buttons"][0][0]
-    assert "глобальной" in global_row["text"].lower()
+    _, global_token = await open_scope_card()
     synthetic = []
     adapter.handle_message = lambda event: synthetic.append(event)  # type: ignore[method-assign]
-    global_token = global_row["payload"].split(":")[1]
     await adapter._handle_message_callback(_callback_update(f"mx:{global_token}:g", callback_id="cb-g"))
     assert synthetic and synthetic[0].text == "/model --global m2"
 
 
 @pytest.mark.asyncio
-async def test_reasoning_choice_offers_global_button(adapter):
+async def test_reasoning_choice_has_scope_step(adapter):
+    applied = []
+
     async def on_select(chat_id, value):
+        applied.append(value)
         return f"Reasoning: {value}"
 
-    await adapter.send_choice_picker(
-        str(CHAT), "Reasoning", [{"value": "low"}, {"value": "high"}], "s1", on_select
-    )
-    keyboard = adapter._api.sent[-1]["attachments"][0]["payload"]["buttons"]
-    token = keyboard[1][0]["payload"].split(":")[1]
-    await adapter._handle_message_callback(_callback_update(f"mx:{token}:1", callback_id="cb-r"))
-    answer = adapter._api.answers[-1]
-    assert "Reasoning: high" in answer["message"]["text"]
-    global_row = answer["message"]["attachments"][0]["payload"]["buttons"][0][0]
+    counter = itertools.count()
+
+    async def open_scope_card():
+        await adapter.send_choice_picker(
+            str(CHAT), "Reasoning", [{"value": "low"}, {"value": "high"}], "s1", on_select
+        )
+        keyboard = adapter._api.sent[-1]["attachments"][0]["payload"]["buttons"]
+        token = keyboard[1][0]["payload"].split(":")[1]
+        await adapter._handle_message_callback(
+            _callback_update(f"mx:{token}:1", callback_id=f"cb-r{next(counter)}")
+        )
+        rows = adapter._api.answers[-1]["message"]["attachments"][0]["payload"]["buttons"]
+        return rows[0][0]["payload"].split(":")[1], rows[1][0]["payload"].split(":")[1]
+
+    session_token, _ = await open_scope_card()
+    await adapter._handle_message_callback(_callback_update(f"mx:{session_token}:s", callback_id="cb-rs"))
+    assert applied == ["high"]
+    assert "Reasoning: high" in adapter._api.answers[-1]["message"]["text"]
+
+    _, global_token = await open_scope_card()
     synthetic = []
     adapter.handle_message = lambda event: synthetic.append(event)  # type: ignore[method-assign]
-    global_token = global_row["payload"].split(":")[1]
     await adapter._handle_message_callback(_callback_update(f"mx:{global_token}:g", callback_id="cb-rg"))
     assert synthetic and synthetic[0].text == "/reasoning high --global"
 
