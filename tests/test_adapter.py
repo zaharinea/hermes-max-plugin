@@ -47,6 +47,9 @@ async def test_dm_from_allowed_user_reaches_agent(adapter, message_update):
     assert event.source.chat_type == "dm"
     assert event.source.user_id == str(ALLOWED)
     assert event.message_id == "mid.1"
+    # Hermes' native admission keeps a closed metadata contract: anything except
+    # the WhatsApp keys (or an empty dict) refuses the event with invalid_params.
+    assert event.metadata == {}
 
 
 @pytest.mark.asyncio

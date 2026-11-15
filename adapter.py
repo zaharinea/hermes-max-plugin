@@ -461,11 +461,6 @@ class MaxAdapter(BasePlatformAdapter):
             media_types=media_types,
             media_filenames=media_filenames,
             timestamp=event_time,
-            metadata={
-                "max_chat_id": chat_id,
-                "max_chat_type": native_type,
-                "max_user_id": sender_id,
-            },
         )
         await self.handle_message(event)
 
