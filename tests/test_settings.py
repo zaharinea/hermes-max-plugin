@@ -73,3 +73,13 @@ def test_register_commands_flag():
 def test_debug_updates_flag():
     assert MaxSettings.from_config(FakeConfig(extra={})).debug_updates is False
     assert MaxSettings.from_config(FakeConfig(extra={"debug_updates": "true"})).debug_updates is True
+
+
+def test_builtin_transcription_flag():
+    assert MaxSettings.from_config(FakeConfig(extra={})).use_builtin_transcription is True
+    assert (
+        MaxSettings.from_config(
+            FakeConfig(extra={"use_builtin_transcription": "false"})
+        ).use_builtin_transcription
+        is False
+    )

@@ -429,6 +429,22 @@ class MaxAdapter(BasePlatformAdapter):
         if not attachments:
             attachments = collect_media_any(update)
 
+        # MAX ships the transcript with the audio attachment; prefer it over STT.
+        # The local STT path stays as the fallback (and can be forced by setting
+        # MAX_USE_BUILTIN_TRANSCRIPTION=false).
+        transcription = ""
+        if self._settings.use_builtin_transcription:
+            transcription = next(
+                (
+                    item.transcription.strip()
+                    for item in attachments
+                    if item.kind == "audio" and item.transcription.strip()
+                ),
+                "",
+            )
+        if transcription:
+            text = f"{text}\n\n[Расшифровка голосового] {transcription}" if text else transcription
+
         media_urls: list[str] = []
         media_types: list[str] = []
         media_filenames: list[str] = []
@@ -469,7 +485,9 @@ class MaxAdapter(BasePlatformAdapter):
         elif "video" in kinds:
             message_type = MessageType.VIDEO
         elif "audio" in kinds:
-            message_type = MessageType.VOICE
+            # A built-in transcript makes the gateway STT pass redundant; keep the
+            # audio available but mark it as a plain audio file.
+            message_type = MessageType.AUDIO if transcription else MessageType.VOICE
         elif "file" in kinds:
             message_type = MessageType.DOCUMENT
 

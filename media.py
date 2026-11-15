@@ -48,6 +48,7 @@ class Attachment:
     filename: str = ""
     size: Optional[int] = None
     mime: str = ""
+    transcription: str = ""
 
     @property
     def is_image(self) -> bool:
@@ -86,6 +87,9 @@ def _attachment_from(item: dict[str, Any]) -> Optional[Attachment]:
         filename=filename,
         size=size,
         mime=mime or _DEFAULT_MIME.get(kind, ""),
+        # MAX ships the audio transcript on the attachment itself (AudioAttachment),
+        # not inside ``payload``; tolerate both shapes.
+        transcription=str(item.get("transcription") or payload.get("transcription") or ""),
     )
 
 

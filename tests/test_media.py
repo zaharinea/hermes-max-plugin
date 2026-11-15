@@ -55,6 +55,33 @@ def test_image_and_file_shapes():
     assert [item.kind for item in found] == ["image", "file"]
 
 
+def test_transcription_is_parsed_from_attachment():
+    message = {
+        "body": {
+            "attachments": [
+                {
+                    "type": "audio",
+                    "transcription": "Привет из MAX",
+                    "payload": {"url": "https://cdn.test/v.ogg"},
+                }
+            ]
+        }
+    }
+    found = collect_attachments(message)
+    assert found[0].transcription == "Привет из MAX"
+
+
+def test_transcription_tolerates_payload_shape():
+    message = {
+        "body": {
+            "attachments": [
+                {"type": "audio", "payload": {"url": "https://cdn.test/v.ogg", "transcription": "из payload"}}
+            ]
+        }
+    }
+    assert collect_attachments(message)[0].transcription == "из payload"
+
+
 def test_nested_media_is_found_outside_body_attachments():
     update = {
         "message": {

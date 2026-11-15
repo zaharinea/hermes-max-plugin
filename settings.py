@@ -96,6 +96,7 @@ class MaxSettings:
     reveal_cooldown: int = 3600
     register_commands: bool = True
     debug_updates: bool = False
+    use_builtin_transcription: bool = True
     state_path: Path = field(default_factory=default_state_path)
 
     @property
@@ -169,5 +170,8 @@ class MaxSettings:
             reveal_cooldown=max(0, _int(get("reveal_cooldown", "MAX_REVEAL_USER_ID_COOLDOWN", ""), 3600)),
             register_commands=_bool(get("register_commands", "MAX_REGISTER_COMMANDS", ""), True),
             debug_updates=_bool(get("debug_updates", "MAX_DEBUG_UPDATES", ""), False),
+            use_builtin_transcription=_bool(
+                get("use_builtin_transcription", "MAX_USE_BUILTIN_TRANSCRIPTION", ""), True
+            ),
             state_path=state_path,
         )

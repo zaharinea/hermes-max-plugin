@@ -123,6 +123,10 @@ optional_env:
     description: "Log the type and shape of every inbound update (no message text). Debug only."
     prompt: "Log update shapes? (true/false)"
     password: false
+  - name: MAX_USE_BUILTIN_TRANSCRIPTION
+    description: "Use the transcript MAX ships with audio attachments (default: true). false = always run Hermes local STT."
+    prompt: "Use MAX built-in transcription? (true/false)"
+    password: false
   - name: MAX_STATE_PATH
     description: "Override the marker/dedup state file path (default: $HERMES_HOME/max/state.json)"
     prompt: "State file path"

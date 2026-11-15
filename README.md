@@ -74,6 +74,7 @@ curl --cacert ~/.hermes/max/certs/russian_trusted_root_ca_pem.crt \
 | `MAX_REVEAL_USER_ID_COOLDOWN` | `3600` | Пауза между ответами `/whoami` |
 | `MAX_REGISTER_COMMANDS` | `true` | Показывать меню команд бота (`PATCH /me/commands`) |
 | `MAX_DEBUG_UPDATES` | `false` | Писать тип и структуру каждого update (без текста), только для отладки |
+| `MAX_USE_BUILTIN_TRANSCRIPTION` | `true` | Брать расшифровку из вложения MAX; `false` — всегда локальный STT |
 | `MAX_STATE_PATH` | `$HERMES_HOME/max/state.json` | Файл marker/журнала |
 
 ## config.yaml
@@ -118,8 +119,9 @@ Bot API MAX не отдаёт номер телефона. Владелец пи
 ## Ограничения
 
 - Голосовые при long polling могут приходить разреженно или не приходить вовсе —
-  это ограничение MAX. Когда аудио доставляется, оно приходит как `audio` и
-  попадает в автоматический STT Hermes (`MessageType.VOICE`); аудиофайлы,
+  это ограничение MAX. Когда аудио доставляется, шлюз сначала берёт готовую
+  расшифровку из поля `transcription` вложения (если MAX её прислал), а иначе
+  отдаёт `audio` в автоматический STT Hermes (`MessageType.VOICE`). Аудиофайлы,
   отправленные документом, тоже распознаются, если MIME начинается с `audio/`.
 - Лимиты MAX: 4000 символов, ~2 сообщения/с в чат, 30 rps глобально.
 - Webhook не используется: long polling выбран из-за NAT и требования CA.

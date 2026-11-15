@@ -235,6 +235,34 @@ async def test_choice_picker_callback(adapter):
     assert "Выбрано: b" in adapter._api.answers[-1]["message"]["text"]
 
 
+@pytest.mark.asyncio
+async def test_builtin_transcription_becomes_text(adapter, message_update):
+    from gateway.platforms.event import MessageType
+
+    events = _capture(adapter)
+    update = message_update(text="", mid="mid-voice")
+    update["message"]["body"]["attachments"] = [
+        {"type": "audio", "transcription": "Привет из MAX", "payload": {}}
+    ]
+    await adapter._handle_message_created(update)
+    assert len(events) == 1
+    event = events[0]
+    assert event.text == "Привет из MAX"
+    assert event.message_type == MessageType.AUDIO
+
+
+@pytest.mark.asyncio
+async def test_caption_and_transcription_are_merged(adapter, message_update):
+    events = _capture(adapter)
+    update = message_update(text="Расшифруй", mid="mid-voice-2")
+    update["message"]["body"]["attachments"] = [
+        {"type": "audio", "transcription": "Привет из MAX", "payload": {}}
+    ]
+    await adapter._handle_message_created(update)
+    assert "Расшифруй" in events[0].text
+    assert "Привет из MAX" in events[0].text
+
+
 def test_kind_detection():
     from adapter import MaxAdapter
 
