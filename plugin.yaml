@@ -1,0 +1,121 @@
+name: max-platform
+label: MAX
+kind: platform
+version: 1.0.0
+description: >
+  MAX (max.ru) gateway adapter for Hermes Agent. Long polling via GET /updates
+  with a persisted marker, outbound text via POST /messages, native media
+  uploads and downloads, inline-keyboard approvals/clarify/choice prompts,
+  typing indicators, group chats and a user_id allowlist. Requires the Russian
+  Trusted Root CA for platform-api2.max.ru (bundled via MAX_CA_CERT_PATH).
+author: zaharinea
+license: MIT
+homepage: https://github.com/zaharinea/hermes-max-plugin
+requires_hermes: ">=0.23.0, <2.0"
+requires_env:
+  - name: MAX_BOT_TOKEN
+    description: "Bot token from business.max.ru (Chat bots -> Configure)"
+    prompt: "MAX bot token"
+    url: "https://business.max.ru/self"
+    password: true
+optional_env:
+  - name: MAX_ALLOWED_USERS
+    description: "Comma-separated MAX user_id values allowed to use the bot. '*' allows everyone (not recommended)."
+    prompt: "Allowed user IDs (comma-separated)"
+    password: false
+  - name: MAX_ALLOW_ALL_USERS
+    description: "Allow any MAX user to use the bot (development only)"
+    prompt: "Allow all users? (true/false)"
+    password: false
+  - name: MAX_GROUP_ALLOWED_CHATS
+    description: "Comma-separated MAX chat_id values of groups the bot may serve. The sender must also be in MAX_ALLOWED_USERS."
+    prompt: "Allowed group chat IDs (comma-separated)"
+    password: false
+  - name: MAX_REQUIRE_MENTION
+    description: "In groups, answer only messages that mention the bot by @username, name or alias, or reply to it (default: true)"
+    prompt: "Require a mention in groups? (true/false)"
+    password: false
+  - name: MAX_BOT_ALIASES
+    description: "Comma-separated extra names the bot answers to in group chats"
+    prompt: "Bot aliases (comma-separated)"
+    password: false
+  - name: MAX_CA_CERT_PATH
+    description: "Path to the Russian Trusted Root CA PEM. Default: $HERMES_HOME/max/certs/russian_trusted_root_ca_pem.crt"
+    prompt: "Russian Trusted Root CA path"
+    password: false
+  - name: MAX_API_BASE
+    description: "MAX Bot API base URL (default: https://platform-api2.max.ru)"
+    prompt: "MAX API base URL"
+    password: false
+  - name: MAX_HOME_CHANNEL
+    description: "Default MAX chat_id for cron and notification delivery"
+    prompt: "Home channel chat_id"
+    password: false
+  - name: MAX_HOME_CHANNEL_NAME
+    description: "Display name for the home channel"
+    prompt: "Home channel name"
+    password: false
+  - name: MAX_FORMAT
+    description: "Outgoing text format: html (default), markdown or plain"
+    prompt: "Message format (html/markdown/plain)"
+    password: false
+  - name: MAX_NOTIFY
+    description: "Ask MAX clients to notify recipients (default: true)"
+    prompt: "Send notifications? (true/false)"
+    password: false
+  - name: MAX_POLL_TIMEOUT
+    description: "Long-poll timeout in seconds, 0-90 (default: 30)"
+    prompt: "Long-poll timeout"
+    password: false
+  - name: MAX_POLL_LIMIT
+    description: "Maximum updates per long-poll request, 1-1000 (default: 100)"
+    prompt: "Updates per poll"
+    password: false
+  - name: MAX_POLL_PAUSE_SECONDS
+    description: "Pause between /updates requests, minimum 0.3 (default: 0.5)"
+    prompt: "Pause between polls"
+    password: false
+  - name: MAX_DEDUP_TTL_SECONDS
+    description: "Duplicate-suppression window for inbound ids (default: 300)"
+    prompt: "Dedup TTL"
+    password: false
+  - name: MAX_BOOTSTRAP_MAX_AGE_SECONDS
+    description: "On the first cold start, ignore updates older than this many seconds (default: 300; 0 = process all)"
+    prompt: "Bootstrap max age"
+    password: false
+  - name: MAX_DOWNLOAD_MAX_MB
+    description: "Maximum inbound attachment size in MB (default: 100)"
+    prompt: "Attachment size limit (MB)"
+    password: false
+  - name: MAX_SEND_RATE_PER_CHAT
+    description: "Outgoing messages per second per chat (default: 2)"
+    prompt: "Messages per second per chat"
+    password: false
+  - name: MAX_GLOBAL_RPS
+    description: "Global outgoing requests per second (default: 30)"
+    prompt: "Global requests per second"
+    password: false
+  - name: MAX_HTTP_TIMEOUT
+    description: "HTTP timeout for non-polling requests in seconds (default: 30)"
+    prompt: "HTTP timeout"
+    password: false
+  - name: MAX_BACKOFF_BASE_SECONDS
+    description: "Initial reconnect backoff in seconds (default: 1)"
+    prompt: "Backoff base"
+    password: false
+  - name: MAX_BACKOFF_MAX_SECONDS
+    description: "Maximum reconnect backoff in seconds (default: 60)"
+    prompt: "Backoff maximum"
+    password: false
+  - name: MAX_CALLBACK_TTL_SECONDS
+    description: "Lifetime of an inline-button callback token in seconds (default: 3600)"
+    prompt: "Callback token TTL"
+    password: false
+  - name: MAX_REVEAL_USER_ID_COOLDOWN
+    description: "Seconds between /whoami answers to the same user (default: 3600)"
+    prompt: "User ID reveal cooldown"
+    password: false
+  - name: MAX_STATE_PATH
+    description: "Override the marker/dedup state file path (default: $HERMES_HOME/max/state.json)"
+    prompt: "State file path"
+    password: false

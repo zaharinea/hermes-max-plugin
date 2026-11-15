@@ -1,0 +1,26 @@
+pre-commit:
+  parallel: false
+  commands:
+    gitleaks:
+      run: gitleaks git --pre-commit --staged --redact --no-banner
+    ruff-format:
+      glob: "*.py"
+      run: uv run ruff format --force-exclude {staged_files}
+      stage_fixed: true
+    ruff-check:
+      glob: "*.py"
+      run: uv run ruff check --fix --force-exclude {staged_files}
+      stage_fixed: true
+    prettier:
+      glob: "*.{json,yaml,yml,md}"
+      run: prettier --write --log-level warn {staged_files}
+      stage_fixed: true
+    compileall:
+      glob: "*.py"
+      run: uv run python -m compileall -q .
+    mypy:
+      glob: "*.py"
+      run: uv run mypy --ignore-missing-imports .
+    pytest:
+      glob: "*.py"
+      run: uv run pytest -q

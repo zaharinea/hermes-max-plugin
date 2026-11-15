@@ -1,0 +1,53 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: next version from conventional commits
+        id: next
+        shell: bash
+        run: |
+          set -euo pipefail
+          last=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          range=${last:+$last..HEAD}
+          log=$(git log ${range:-HEAD} --format=%s)
+          breaking=$(printf '%s\n' "$log" | grep -cE '^\[[^]]+\][[:space:]]+[a-z]+(\([^)]*\))?!:' || true)
+          feat=$(printf '%s\n' "$log" | grep -cE '^\[[^]]+\][[:space:]]+feat(\([^)]*\))?:' || true)
+          fix=$(printf '%s\n' "$log" | grep -cE '^\[[^]]+\][[:space:]]+(fix|perf|build|docs|revert)(\([^)]*\))?:' || true)
+          if [ -z "$last" ]; then base="0.0.0"; else base="${last#v}"; fi
+          IFS=. read -r major minor patch <<< "$base"
+          if [ "$breaking" -gt 0 ]; then
+            major=$((major + 1)); minor=0; patch=0
+          elif [ "$feat" -gt 0 ]; then
+            minor=$((minor + 1)); patch=0
+          elif [ "$fix" -gt 0 ]; then
+            patch=$((patch + 1))
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "no release-worthy commits since ${last:-the beginning}"
+            exit 0
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=v${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+
+      - name: create tag and release
+        if: steps.next.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.next.outputs.tag }}" \
+            --target "$GITHUB_SHA" \
+            --title "${{ steps.next.outputs.tag }}" \
+            --generate-notes

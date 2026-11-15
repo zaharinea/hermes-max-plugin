@@ -1,0 +1,28 @@
+[project]
+name = "hermes-max-platform"
+version = "1.0.0"
+description = "MAX (max.ru) gateway plugin for Hermes Agent"
+authors = [{ name = "zaharinea" }]
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = []
+readme = "README.md"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--import-mode=importlib"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+exclude = [".git", ".venv", "__pycache__"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501"]
