@@ -1477,8 +1477,12 @@ class MaxAdapter(BasePlatformAdapter):
             return callback(entry.chat_id, model, provider)
 
         # A model id is interpolated into a slash command; refuse values that could
-        # parse as flags or split into another command.
+        # parse as flags or split into another command. The picked provider rides along:
+        # the global scope re-dispatches the pick as typed text, and without --provider
+        # the gateway validates the model against the session's current provider — so a
+        # model picked from another provider's row is rejected as "not found".
         can_global = bool(user_id) and self._safe_command_value(model)
+        provider_flag = f" --provider {provider}" if provider and self._safe_command_value(provider) else ""
         token = self._callbacks.put(
             "scope_choice",
             chat_id=entry.chat_id,
@@ -1487,7 +1491,7 @@ class MaxAdapter(BasePlatformAdapter):
                 "apply": _apply,
                 "value": model,
                 "label": model,
-                "command": f"/model --global {model}" if can_global else "",
+                "command": f"/model --global{provider_flag} {model}" if can_global else "",
             },
         )
         rows = [[{"type": "callback", "text": "✅ Только эта сессия", "payload": f"mx:{token}:s"}]]

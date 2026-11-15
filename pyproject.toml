@@ -1,6 +1,6 @@
 [project]
 name = "hermes-max-platform"
-version = "1.0.0"
+version = "1.0.1"
 description = "MAX (max.ru) gateway plugin for Hermes Agent"
 authors = [{ name = "zaharinea" }]
 license = { text = "MIT" }

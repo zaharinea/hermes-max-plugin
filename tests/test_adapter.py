@@ -286,7 +286,8 @@ async def test_model_picker_scope_step(adapter):
         await adapter._handle_message_callback(
             _callback_update(f"mx:{provider_token}:p:0", callback_id=f"cb-p{next(counter)}")
         )
-        model_rows = adapter._api.answers[-1]["message"]["attachments"][0]["payload"]["buttons"]
+        rows = adapter._api.answers[-1]["message"]["attachments"][0]["payload"]["buttons"]
+        model_rows = [row for row in rows if ":m:" in row[0]["payload"]]
         assert [row[0]["text"] for row in model_rows] == ["m1", "m2"]
         model_token = model_rows[1][0]["payload"].split(":")[1]
         await adapter._handle_message_callback(
@@ -303,10 +304,11 @@ async def test_model_picker_scope_step(adapter):
     assert "Модель: m2" in adapter._api.answers[-1]["message"]["text"]
 
     _, global_token = await open_scope_card()
-    synthetic = []
-    adapter.handle_message = lambda event: synthetic.append(event)  # type: ignore[method-assign]
+    synthetic = _capture(adapter)
     await adapter._handle_message_callback(_callback_update(f"mx:{global_token}:g", callback_id="cb-g"))
-    assert synthetic and synthetic[0].text == "/model --global m2"
+    # The provider rides along: the global pick re-dispatches as typed /model, which
+    # validates the model against the provider it came from, not the session's current one.
+    assert synthetic and synthetic[0].text == "/model --global --provider p1 m2"
 
 
 @pytest.mark.asyncio
@@ -337,8 +339,7 @@ async def test_reasoning_choice_has_scope_step(adapter):
     assert "Reasoning: high" in adapter._api.answers[-1]["message"]["text"]
 
     _, global_token = await open_scope_card()
-    synthetic = []
-    adapter.handle_message = lambda event: synthetic.append(event)  # type: ignore[method-assign]
+    synthetic = _capture(adapter)
     await adapter._handle_message_callback(_callback_update(f"mx:{global_token}:g", callback_id="cb-rg"))
     assert synthetic and synthetic[0].text == "/reasoning high --global"
 

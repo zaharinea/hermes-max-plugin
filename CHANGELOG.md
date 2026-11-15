@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 — 2026-11-15
+
+- «Сделать глобальной» в пикере передаёт провайдера (`/model --global --provider <slug> <model>`): раньше
+  выбор модели из строки другого провайдера отклонялся с «not found in this provider's model listing»,
+  потому что команда проверялась по текущему провайдеру сессии.
+
 ## 1.0.0 — 2026-11-15
 
 - Long polling (`GET /updates`) with a persisted marker and per-update dedup journal.

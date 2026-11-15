@@ -1,7 +1,7 @@
 name: max-platform
 label: MAX
 kind: platform
-version: 1.0.0
+version: 1.0.1
 description: >
   MAX (max.ru) gateway adapter for Hermes Agent. Long polling via GET /updates
   with a persisted marker, outbound text via POST /messages, native media
