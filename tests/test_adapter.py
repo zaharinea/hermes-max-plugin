@@ -343,6 +343,56 @@ async def test_reasoning_choice_has_scope_step(adapter):
     assert synthetic and synthetic[0].text == "/reasoning high --global"
 
 
+@pytest.mark.asyncio
+async def test_model_picker_paginates_providers_and_models(adapter):
+    from adapter import _MAX_MODELS_PER_PAGE, _MAX_PROVIDERS_PER_PAGE
+
+    async def on_select(*_args):
+        return "ok"
+
+    providers = [
+        {"slug": f"p{i}", "name": f"P{i}", "models": [f"m{i}-{j}" for j in range(45)]} for i in range(15)
+    ]
+    await adapter.send_model_picker(str(CHAT), providers, "", "p0", "s1", on_select)
+    keyboard = adapter._api.sent[-1]["attachments"][0]["payload"]["buttons"]
+    assert len(keyboard) == _MAX_PROVIDERS_PER_PAGE + 2  # page of providers + pager + cancel
+    next_page = keyboard[_MAX_PROVIDERS_PER_PAGE][-1]
+    assert next_page["text"] == "▶"
+    provider_token = next_page["payload"].split(":")[1]
+    await adapter._handle_message_callback(_callback_update(f"mx:{provider_token}:pp:1", callback_id="cb-pp"))
+    rows = adapter._api.answers[-1]["message"]["attachments"][0]["payload"]["buttons"]
+    assert len(rows) == 5 + 2  # 15 providers on two pages
+
+    await adapter._handle_message_callback(_callback_update(rows[0][0]["payload"], callback_id="cb-p"))
+    model_rows = adapter._api.answers[-1]["message"]["attachments"][0]["payload"]["buttons"]
+    assert len(model_rows) == _MAX_MODELS_PER_PAGE + 2  # page of models + pager + back
+    model_next = model_rows[_MAX_MODELS_PER_PAGE][-1]
+    assert model_next["text"] == "▶"
+    model_token = model_next["payload"].split(":")[1]
+    await adapter._handle_message_callback(_callback_update(f"mx:{model_token}:mp:2", callback_id="cb-mp"))
+    last_page = adapter._api.answers[-1]["message"]["attachments"][0]["payload"]["buttons"]
+    assert len(last_page) == 5 + 2  # 45 models on three pages
+
+
+@pytest.mark.asyncio
+async def test_model_picker_back_to_providers(adapter):
+    async def on_select(*_args):
+        return "ok"
+
+    providers = [{"slug": "p1", "name": "P1", "models": ["m1"]}]
+    await adapter.send_model_picker(str(CHAT), providers, "", "p1", "s1", on_select)
+    provider_token = adapter._api.sent[-1]["attachments"][0]["payload"]["buttons"][0][0]["payload"].split(
+        ":"
+    )[1]
+    await adapter._handle_message_callback(_callback_update(f"mx:{provider_token}:p:0", callback_id="cb-p"))
+    model_rows = adapter._api.answers[-1]["message"]["attachments"][0]["payload"]["buttons"]
+    back = model_rows[-1][0]
+    assert "провайдерам" in back["text"].lower()
+    await adapter._handle_message_callback(_callback_update(back["payload"], callback_id="cb-bc"))
+    rows = adapter._api.answers[-1]["message"]["attachments"][0]["payload"]["buttons"]
+    assert rows[0][0]["text"].startswith("✓")
+
+
 def test_menu_commands_are_capped_and_valid(adapter):
     rows = adapter._menu_commands()
     assert len(rows) == 20

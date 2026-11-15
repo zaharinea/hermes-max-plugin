@@ -77,8 +77,8 @@ _PLATFORM_HINT = (
 )
 # Curated menu: MAX allows 32 entries, but a short list is easier to use. The
 # full set stays reachable by typing any command (and via /commands).
-_MAX_MODEL_PROVIDERS = 29  # one button per row, MAX allows 30 rows
-_MAX_MODEL_ROWS = 25
+_MAX_PROVIDERS_PER_PAGE = 10
+_MAX_MODELS_PER_PAGE = 20
 _MAX_KNOWN_CHATS = 500
 _MAX_ATTACHMENTS = 10
 _MAX_OUTBOUND_BYTES = 50 * 1024 * 1024
@@ -1313,39 +1313,114 @@ class MaxAdapter(BasePlatformAdapter):
         on_model_selected,
         metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
-        """Two-step provider → model picker, edited in place through ``POST /answers``."""
+        """Paginated provider → model picker, edited in place through ``POST /answers``."""
         if not providers:
             return SendResult(success=False, error="No providers")
         state = {
+            "chat_id": str(chat_id),
             "providers": list(providers),
             "current_model": current_model,
             "current_provider": current_provider,
             "session_key": session_key,
             "on_model_selected": on_model_selected,
         }
-        token = self._callbacks.put("model_provider", chat_id=chat_id, session_key=session_key, extra=state)
+        text, keyboard = self._provider_card(state, 0)
+        return await self._send_payload(chat_id, text, attachments=[keyboard], raw_text=True)
+
+    def _provider_card(self, state: dict[str, Any], page: int) -> tuple[str, dict[str, Any]]:
+        providers = list(state.get("providers") or [])
+        total_pages = max(1, (len(providers) + _MAX_PROVIDERS_PER_PAGE - 1) // _MAX_PROVIDERS_PER_PAGE)
+        page = max(0, min(int(page), total_pages - 1))
+        token = self._callbacks.put(
+            "model_provider",
+            chat_id=state["chat_id"],
+            session_key=state.get("session_key"),
+            extra={**state, "page": page},
+        )
+        start = page * _MAX_PROVIDERS_PER_PAGE
         rows: list[list[dict[str, Any]]] = []
-        for index, provider in enumerate(providers[:_MAX_MODEL_PROVIDERS]):
+        for offset, provider in enumerate(providers[start : start + _MAX_PROVIDERS_PER_PAGE]):
+            index = start + offset
             name = str(provider.get("name") or provider.get("slug") or "?")
             count = provider.get("total_models") or len(provider.get("models") or [])
             label = f"{name} ({count})"
-            if provider.get("is_current") or str(provider.get("slug")) == str(current_provider):
+            if provider.get("is_current") or str(provider.get("slug")) == str(state.get("current_provider")):
                 label = f"✓ {label}"
             rows.append([{"type": "callback", "text": label[:128], "payload": f"mx:{token}:p:{index}"}])
+        rows.append(self._pager_row(token, "pp", page, total_pages))
+        rows.append([{"type": "callback", "text": "✖ Отмена", "payload": f"mx:{token}:x"}])
         text = (
-            f"⚙ Выбор модели\nТекущая: {current_model or '—'}\n"
-            f"Провайдер: {current_provider or '—'}\n\nВыберите провайдера:"
+            f"⚙ Выбор модели\nТекущая: {state.get('current_model') or '—'}\n"
+            f"Провайдер: {state.get('current_provider') or '—'}\n\n"
+            f"Выберите провайдера ({page + 1}/{total_pages}):"
         )
-        return await self._send_payload(chat_id, text, attachments=[self._keyboard(rows)], raw_text=True)
+        return text, self._keyboard(rows)
+
+    def _model_card(self, state: dict[str, Any], page: int) -> tuple[str, dict[str, Any]]:
+        models = list(state.get("models") or [])
+        total_pages = max(1, (len(models) + _MAX_MODELS_PER_PAGE - 1) // _MAX_MODELS_PER_PAGE)
+        page = max(0, min(int(page), total_pages - 1))
+        token = self._callbacks.put(
+            "model_choice",
+            chat_id=state["chat_id"],
+            session_key=state.get("session_key"),
+            extra={**state, "page": page},
+        )
+        start = page * _MAX_MODELS_PER_PAGE
+        rows: list[list[dict[str, Any]]] = []
+        for offset, model in enumerate(models[start : start + _MAX_MODELS_PER_PAGE]):
+            rows.append(
+                [{"type": "callback", "text": model[:128], "payload": f"mx:{token}:m:{start + offset}"}]
+            )
+        rows.append(self._pager_row(token, "mp", page, total_pages))
+        rows.append([{"type": "callback", "text": "↩ К провайдерам", "payload": f"mx:{token}:bc"}])
+        text = (
+            f"⚙ {state.get('provider_name') or 'Провайдер'}\n"
+            f"Модель (текущая: {state.get('current_model') or '—'}): {page + 1}/{total_pages}"
+        )
+        return text, self._keyboard(rows)
+
+    @staticmethod
+    def _pager_row(token: str, prefix: str, page: int, total_pages: int) -> list[dict[str, Any]]:
+        row: list[dict[str, Any]] = []
+        if page > 0:
+            row.append({"type": "callback", "text": "◀", "payload": f"mx:{token}:{prefix}:{page - 1}"})
+        row.append(
+            {
+                "type": "callback",
+                "text": f"{page + 1}/{total_pages}",
+                "payload": f"mx:{token}:{prefix}:{page}",
+            }
+        )
+        if page < total_pages - 1:
+            row.append({"type": "callback", "text": "▶", "payload": f"mx:{token}:{prefix}:{page + 1}"})
+        return row
 
     async def _resolve_model_provider(self, entry: Any, action: str, callback_id: str) -> None:
+        state = dict(entry.extra or {})
+        providers = list(state.get("providers") or [])
+        if action.startswith("pp:"):
+            try:
+                page = int(action.split(":", 1)[1])
+            except (IndexError, ValueError):
+                await self._answer_callback(callback_id, notification="Некорректная страница.")
+                return
+            text, keyboard = self._provider_card(state, page)
+            await self._answer_callback(callback_id, message={"text": text, "attachments": [keyboard]})
+            return
+        if action == "x":
+            await self._answer_callback(
+                callback_id, notification="Отменено.", message={"text": "Отменено.", "attachments": []}
+            )
+            return
+        if not action.startswith("p:"):
+            await self._answer_callback(callback_id, notification="Некорректный провайдер.")
+            return
         try:
             index = int(action.split(":", 1)[1])
         except (IndexError, ValueError):
             await self._answer_callback(callback_id, notification="Некорректный провайдер.")
             return
-        state = dict(entry.extra or {})
-        providers = list(state.get("providers") or [])
         if index < 0 or index >= len(providers):
             await self._answer_callback(callback_id, notification="Некорректный провайдер.")
             return
@@ -1354,33 +1429,39 @@ class MaxAdapter(BasePlatformAdapter):
         if not models:
             await self._answer_callback(callback_id, notification="У провайдера нет моделей.")
             return
-        state["models"] = models
-        state["provider_slug"] = str(provider.get("slug") or "")
-        state["provider_name"] = str(provider.get("name") or provider.get("slug") or "")
-        token = self._callbacks.put(
-            "model_choice", chat_id=entry.chat_id, session_key=entry.session_key, extra=state
+        state.update(
+            {
+                "models": models,
+                "provider_slug": str(provider.get("slug") or ""),
+                "provider_name": str(provider.get("name") or provider.get("slug") or ""),
+                "provider_page": int(state.get("page") or 0),
+            }
         )
-        shown = models[:_MAX_MODEL_ROWS]
-        rows = [
-            [{"type": "callback", "text": model[:128], "payload": f"mx:{token}:m:{model_index}"}]
-            for model_index, model in enumerate(shown)
-        ]
-        text = f"⚙ {state['provider_name']}\nМодель (текущая: {state.get('current_model') or '—'}):"
-        if len(models) > len(shown):
-            text += f"\n\nПоказаны первые {len(shown)} из {len(models)}; остальные — /model <имя>."
-        await self._answer_callback(
-            callback_id, notification=None, message={"text": text, "attachments": [self._keyboard(rows)]}
-        )
+        text, keyboard = self._model_card(state, 0)
+        await self._answer_callback(callback_id, message={"text": text, "attachments": [keyboard]})
 
     async def _resolve_model_choice(
         self, entry: Any, action: str, callback_id: str, user_id: str = ""
     ) -> None:
+        state = dict(entry.extra or {})
+        if action.startswith("mp:"):
+            try:
+                page = int(action.split(":", 1)[1])
+            except (IndexError, ValueError):
+                await self._answer_callback(callback_id, notification="Некорректная страница.")
+                return
+            text, keyboard = self._model_card(state, page)
+            await self._answer_callback(callback_id, message={"text": text, "attachments": [keyboard]})
+            return
+        if action == "bc":
+            text, keyboard = self._provider_card(state, int(state.get("provider_page") or 0))
+            await self._answer_callback(callback_id, message={"text": text, "attachments": [keyboard]})
+            return
         try:
             index = int(action.split(":", 1)[1])
         except (IndexError, ValueError):
             await self._answer_callback(callback_id, notification="Некорректная модель.")
             return
-        state = dict(entry.extra or {})
         models = list(state.get("models") or [])
         if index < 0 or index >= len(models):
             await self._answer_callback(callback_id, notification="Некорректная модель.")
