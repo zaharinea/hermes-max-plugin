@@ -265,11 +265,12 @@ async def test_caption_and_transcription_are_merged(adapter, message_update):
 
 def test_menu_commands_are_capped_and_valid(adapter):
     rows = adapter._menu_commands()
-    assert rows
-    assert len(rows) <= 32
+    assert len(rows) == 20
     assert all(row["name"] and row["description"] for row in rows)
     assert all(len(row["name"]) <= 64 and len(row["description"]) <= 128 for row in rows)
     assert len({row["name"] for row in rows}) == len(rows)
+    names = {row["name"] for row in rows}
+    assert {"status", "new", "stop", "cron", "commands", "sessions", "steer"} <= names
 
 
 def test_kind_detection():

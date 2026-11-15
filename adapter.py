@@ -74,14 +74,29 @@ _PLATFORM_HINT = (
     "uploaded as attachments. In group chats the bot answers only when mentioned unless "
     "MAX_REQUIRE_MENTION is disabled. Approval and clarify prompts use inline buttons."
 )
-_MAX_MENU_COMMANDS = 32  # MAX caps the bot command list at 32 entries
+# Curated menu: MAX allows 32 entries, but a short list is easier to use. The
+# full set stays reachable by typing any command (and via /commands).
 _COMMAND_MENU = (
-    {"name": "start", "description": "Начать диалог"},
-    {"name": "status", "description": "Состояние агента и шлюза"},
-    {"name": "new", "description": "Новая сессия"},
-    {"name": "reset", "description": "Сбросить сессию"},
-    {"name": "model", "description": "Выбрать модель"},
-    {"name": "help", "description": "Список команд"},
+    {"name": "status", "description": "Состояние сессии, модели и контекста"},
+    {"name": "new", "description": "Начать новую сессию"},
+    {"name": "stop", "description": "Остановить фоновые процессы"},
+    {"name": "context", "description": "Контекст: занято, категории, сжатие"},
+    {"name": "model", "description": "Сменить модель (--global — навсегда)"},
+    {"name": "reasoning", "description": "Глубина и показ рассуждений"},
+    {"name": "cron", "description": "Задачи по расписанию"},
+    {"name": "memory", "description": "Память: записи и одобрение"},
+    {"name": "agents", "description": "Активные задачи и субагенты"},
+    {"name": "tools", "description": "Инструменты: список, вкл/выкл"},
+    {"name": "skills", "description": "Навыки: поиск и установка"},
+    {"name": "approve", "description": "Одобрить ожидающую опасную команду"},
+    {"name": "deny", "description": "Отклонить ожидающую опасную команду"},
+    {"name": "sessions", "description": "Прошлые сессии: список и выбор"},
+    {"name": "resume", "description": "Продолжить сессию по имени"},
+    {"name": "queue", "description": "Очередь промптов: поставить или список"},
+    {"name": "steer", "description": "Вставить сообщение после следующего шага"},
+    {"name": "btw", "description": "Вопрос в сторону, не прерывая работу"},
+    {"name": "commands", "description": "Полный список команд и скиллов"},
+    {"name": "help", "description": "Справка по командам"},
 )
 
 
@@ -232,26 +247,7 @@ class MaxAdapter(BasePlatformAdapter):
             logger.debug("[max] command menu registration failed: %s", exc)
 
     def _menu_commands(self) -> list[dict[str, str]]:
-        """Core gateway commands (same source Telegram uses), capped at MAX's 32 slots."""
-        try:
-            from hermes_cli.commands_platforms import telegram_bot_commands
-
-            pairs = list(telegram_bot_commands(include_plugins=True))
-        except Exception:
-            pairs = [(row["name"], row["description"]) for row in _COMMAND_MENU]
-        rows: list[dict[str, str]] = []
-        seen: set[str] = set()
-        for name, description in pairs:
-            clean = str(name or "").strip().lstrip("/")
-            desc = str(description or "").strip()
-            if not clean or not desc or clean in seen:
-                continue
-            seen.add(clean)
-            rows.append({"name": clean[:64], "description": desc[:128]})
-            if len(rows) >= _MAX_MENU_COMMANDS:
-                break
-        if rows:
-            return rows
+        """The curated static menu (no core imports: keeps ``plugins validate`` clean)."""
         return [dict(row) for row in _COMMAND_MENU]
 
     async def disconnect(self) -> None:
